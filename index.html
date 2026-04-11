@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>夜勤手当計算アプリ</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<header>
+  <h1>夜勤手当計算アプリ</h1>
+  <p class="lead">勤怠Excelから夜勤手当（22:00〜翌8:00 / 1,000円/時 / 上限5,000円）を自動計算します。</p>
+  <p class="privacy">ファイルはブラウザ内でのみ処理され、外部サーバーには送信されません。</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>STEP 1: Excelファイルを選択</h2>
+    <input type="file" id="fileInput" accept=".xlsx,.xls">
+    <div id="fileInfo" class="muted"></div>
+  </section>
+
+  <section class="card" id="configSection" hidden>
+    <h2>STEP 2: 列の指定</h2>
+    <div class="form-row">
+      <label>シート</label>
+      <select id="sheetSelect"></select>
+    </div>
+    <div class="form-row">
+      <label>ヘッダー行番号</label>
+      <input type="number" id="headerRow" value="1" min="1" max="20">
+    </div>
+    <div class="form-row">
+      <label>従業員列</label>
+      <select id="colEmployee"></select>
+    </div>
+    <div class="form-row">
+      <label>開始日時列</label>
+      <select id="colStart"></select>
+    </div>
+    <div class="form-row">
+      <label>終了日時列</label>
+      <select id="colEnd"></select>
+    </div>
+    <div class="form-row">
+      <label>出力列名</label>
+      <input type="text" id="outputColName" value="夜勤手当">
+    </div>
+    <button id="runBtn" class="primary">計算する</button>
+  </section>
+
+  <section class="card" id="resultSection" hidden>
+    <h2>STEP 3: 結果</h2>
+    <div id="summary"></div>
+    <button id="downloadBtn" class="primary">結果をダウンロード</button>
+  </section>
+
+  <section class="card">
+    <h2>動作確認（組み込みテスト）</h2>
+    <p class="muted">計画書の仕様に基づく計算ロジックを検証します。</p>
+    <button id="testBtn">テストを実行</button>
+    <div id="testResults"></div>
+  </section>
+
+  <section class="card collapsible">
+    <h2>計算ルール</h2>
+    <ul>
+      <li>夜勤時間帯: <strong>22:00 〜 翌8:00</strong></li>
+      <li>単価: <strong>1,000円 / 時間</strong>（夜勤時間帯にかかった分のみ）</li>
+      <li>1シフトあたりの上限: <strong>5,000円</strong></li>
+      <li>同一従業員で「前行の終了時刻 = 次行の開始時刻」の行は1シフトとして扱います</li>
+      <li>上限超過時は先頭行から順に充当（FIFO方式）</li>
+    </ul>
+  </section>
+</main>
+
+<footer>
+  <p class="muted">&copy; 夜勤手当計算アプリ</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
