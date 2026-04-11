@@ -168,3 +168,16 @@ footer {
   .form-row label { min-width: auto; }
   .form-row input, .form-row select { max-width: none; }
 }
+
+.button-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.muted.success { color: var(--success); }
+.muted.warning { color: var(--warning); }
+
+.summary-box strong { margin-right: 0.25rem; }
+.summary-box strong + strong { margin-left: 1rem; }
