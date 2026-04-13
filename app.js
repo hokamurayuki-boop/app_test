@@ -3,14 +3,14 @@
  * 入力: 訪問介護シフト CSV (Shift-JIS, 10列)
  *   ヘルパー名, 日付, 曜日, 利用者, 業務種別, サービス内容, 開始時間, 終了時間, 提供時間（分）, 備考
  *
- * 計算ルール:
- *   - 夜勤時間帯: 22:00 〜 翌8:00
- *   - 単価: 500円 / 30分ブロック
- *   - 30分未満は切り上げ: 1-30分 → 500円、31-60分 → 1000円 ...
- *     (row_raw = ceil(row_night_min / 30) * 500)
- *   - シフト上限: 5,000円
- *   - シフト: 同一従業員 && 前行終了時刻 == 次行開始時刻 (±1分)
- *   - 上限超過時は先頭行から順に充当 (FIFO)
+ * 計算ルール (夜勤手当テスト/calculate_night_allowance.js をベースに、丸めは切り上げ):
+ *   - 1サイクル = 22:00(day D) 〜 08:00(day D+1) の 10 時間帯
+ *   - 単価: 500円 / 30分ブロック（30分未満は切り上げ）
+ *   - サイクル手当 = min( ceil(サイクル合計夜勤分数 / 30) * 500, 5,000 )
+ *   - サイクル候補日は、従業員ごとに「22時以降に終わる行の day」または
+ *     「8時前に始まる行の day - 1」の集合として列挙
+ *   - 明細行への配分は、同一サイクル内の行を時系列順に並べ、
+ *     累積夜勤分数ベースで行別手当を決定する（合計がサイクル手当と一致）
  *
  * 年月: ファイル名から自動抽出（取れない場合は手入力）
  */
@@ -19,97 +19,78 @@
 
 // ========== 計算ロジック ==========
 
-/** 指定区間 [start, end] と 22:00-翌8:00 の重なり分数を返す */
-function nightMinutes(start, end) {
-  if (!(start instanceof Date) || !(end instanceof Date)) return 0;
-  if (end <= start) return 0;
-
-  let total = 0;
-  let cursor = new Date(start);
-
-  while (cursor < end) {
-    const dayStart = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate());
-    const nextDay = new Date(dayStart);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const chunkEnd = end < nextDay ? end : nextDay;
-
-    const earlyEnd = new Date(dayStart); earlyEnd.setHours(8);
-    const lateStart = new Date(dayStart); lateStart.setHours(22);
-
-    total += overlapMinutes(cursor, chunkEnd, dayStart, earlyEnd);
-    total += overlapMinutes(cursor, chunkEnd, lateStart, nextDay);
-
-    cursor = chunkEnd;
-  }
-  return total;
-}
-
+/** 2つの [start,end] 区間の重なり分数 */
 function overlapMinutes(aStart, aEnd, bStart, bEnd) {
   const s = Math.max(aStart.getTime(), bStart.getTime());
   const e = Math.min(aEnd.getTime(), bEnd.getTime());
   return Math.max(0, Math.round((e - s) / 60000));
 }
 
-/** 分数 → 手当額 (30分未満は切り上げ): ceil(min / 30) * 500 */
-function rawAllowanceFromMinutes(min) {
-  if (min <= 0) return 0;
-  return Math.ceil(min / 30) * 500;
+/** サイクル帯 [22:00 cycleDay, 08:00 cycleDay+1] と行の重なり分数 */
+function cycleOverlapMinutes(row, year, month, cycleDay) {
+  const cycleStart = new Date(year, month - 1, cycleDay, 22, 0);
+  const cycleEnd = new Date(year, month - 1, cycleDay + 1, 8, 0);
+  return overlapMinutes(row.start, row.end, cycleStart, cycleEnd);
 }
 
-/** 行を同一シフトにグルーピング (同一従業員 && 前行終了==次行開始 ±1分) */
-function groupShifts(rows) {
-  const sorted = [...rows].sort((a, b) => {
-    if (a.employeeId !== b.employeeId) {
-      return String(a.employeeId).localeCompare(String(b.employeeId));
-    }
-    return a.start - b.start;
-  });
-
-  const shifts = [];
-  let current = null;
-  const TOLERANCE_MS = 60 * 1000;
-
-  for (const row of sorted) {
-    if (current &&
-        current.employeeId === row.employeeId &&
-        Math.abs(current.rows[current.rows.length - 1].end - row.start) <= TOLERANCE_MS) {
-      current.rows.push(row);
-    } else {
-      current = { employeeId: row.employeeId, rows: [row] };
-      shifts.push(current);
-    }
+/** 行集合からサイクル候補日を抽出 (元スクリプト準拠) */
+function collectCycleDays(rows) {
+  const days = new Set();
+  for (const r of rows) {
+    if (r.endMin > 22 * 60) days.add(r.day);      // 22時以降終了 → そのdayのサイクル
+    if (r.startMin < 8 * 60) days.add(r.day - 1); // 8時前開始 → 前日のサイクル
   }
-  return shifts;
+  return [...days].sort((a, b) => a - b);
 }
 
-/** シフト単位で手当を計算し、上限5000円を適用してFIFO配分 */
-function applyAllowance(shifts, { capPerShift = 5000 } = {}) {
-  for (const shift of shifts) {
-    let rawTotal = 0;
-    for (const row of shift.rows) {
-      row.nightMin = nightMinutes(row.start, row.end);
-      row.rawAllowance = rawAllowanceFromMinutes(row.nightMin);
-      rawTotal += row.rawAllowance;
-    }
-    shift.rawTotal = rawTotal;
-    shift.finalTotal = Math.min(rawTotal, capPerShift);
-
-    if (rawTotal <= capPerShift) {
-      for (const row of shift.rows) row.finalAllowance = row.rawAllowance;
-    } else {
-      let remaining = capPerShift;
-      for (const row of shift.rows) {
-        row.finalAllowance = Math.min(row.rawAllowance, remaining);
-        remaining -= row.finalAllowance;
-      }
+/** 1サイクルぶんを計算 (合算 → floor → cap → FIFO 配分) */
+function computeCycle(employeeId, empRows, year, month, cycleDay) {
+  const contributing = [];
+  let totalMin = 0;
+  for (const row of empRows) {
+    const nm = cycleOverlapMinutes(row, year, month, cycleDay);
+    if (nm > 0) {
+      contributing.push({ row, nightMin: nm, allowance: 0 });
+      totalMin += nm;
     }
   }
-  return shifts;
+  const units = Math.ceil(totalMin / 30);
+  const allowance = Math.min(units * 500, 5000);
+
+  // 時系列順に累積ベースで配分 → 合計が allowance に一致
+  contributing.sort((a, b) => a.row.start - b.row.start);
+  let cumMin = 0;
+  let prevCumAllow = 0;
+  for (const item of contributing) {
+    cumMin += item.nightMin;
+    const cumAllow = Math.min(Math.ceil(cumMin / 30) * 500, 5000);
+    item.allowance = cumAllow - prevCumAllow;
+    prevCumAllow = cumAllow;
+  }
+
+  return { employeeId, cycleDay, year, month, items: contributing, totalMin, units, allowance };
+}
+
+/** 全行 → サイクル配列 (allowance>0 のみ) */
+function computeCycles(rows, year, month) {
+  const byEmp = new Map();
+  for (const r of rows) {
+    if (!byEmp.has(r.employeeId)) byEmp.set(r.employeeId, []);
+    byEmp.get(r.employeeId).push(r);
+  }
+  const cycles = [];
+  for (const [emp, empRows] of byEmp) {
+    const cycleDays = collectCycleDays(empRows);
+    for (const cd of cycleDays) {
+      const cyc = computeCycle(emp, empRows, year, month, cd);
+      if (cyc.allowance > 0) cycles.push(cyc);
+    }
+  }
+  return cycles;
 }
 
 // ========== CSV パース ==========
 
-/** 簡易CSVパーサー (ダブルクォート / CRLF / 内側カンマ対応) */
 function parseCSV(text) {
   const rows = [];
   let i = 0;
@@ -145,83 +126,60 @@ function parseCSV(text) {
   return rows;
 }
 
-/** Shift-JIS / UTF-8 自動判定デコード */
 function decodeCSV(arrayBuffer) {
-  // BOM判定
   const u8 = new Uint8Array(arrayBuffer);
   if (u8[0] === 0xEF && u8[1] === 0xBB && u8[2] === 0xBF) {
     return new TextDecoder('utf-8').decode(arrayBuffer);
   }
-  // まず Shift-JIS で試す (このアプリは Shift-JIS がメインのため)
   try {
     const text = new TextDecoder('shift_jis', { fatal: false }).decode(arrayBuffer);
-    // 「ヘルパー」「日付」などが含まれていれば Shift-JIS 成功とみなす
     if (text.includes('ヘルパー') || text.includes('日付') || text.includes('開始時間')) {
       return text;
     }
   } catch (e) { /* fallthrough */ }
-  // フォールバック: UTF-8
   return new TextDecoder('utf-8').decode(arrayBuffer);
 }
 
 // ========== 時刻・日付構築 ==========
 
-/** "HH:MM" を {h, m} にパース。"24:00" → {h:24, m:0} */
 function parseTime(str) {
-  const m = String(str).trim().match(/^(\d{1,2}):(\d{2})$/);
+  const m = String(str).trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
   if (!m) return null;
   return { h: parseInt(m[1], 10), mi: parseInt(m[2], 10) };
 }
 
-/** 年月日時刻からDate生成。h=24はY月D+1日の00:00として扱う */
 function makeDateTime(year, month, day, h, mi) {
-  if (h === 24 && mi === 0) {
-    return new Date(year, month - 1, day + 1, 0, 0);
-  }
+  if (h === 24 && mi === 0) return new Date(year, month - 1, day + 1, 0, 0);
   return new Date(year, month - 1, day, h, mi);
 }
 
-/** ファイル名から年月を抽出 */
 function extractYearMonth(filename) {
   const base = filename.replace(/\.[^.]+$/, '');
   let m;
-
-  // 令和N年MM月 / 令和N年M月
   m = base.match(/令和(\d+)年(\d{1,2})月/);
   if (m) return { year: 2018 + parseInt(m[1], 10), month: parseInt(m[2], 10) };
-
-  // 平成N年MM月
   m = base.match(/平成(\d+)年(\d{1,2})月/);
   if (m) return { year: 1988 + parseInt(m[1], 10), month: parseInt(m[2], 10) };
-
-  // R8-04, R8_4, R8.4, R8年4月
   m = base.match(/[Rr](\d+)[\-_.年](\d{1,2})/);
   if (m) return { year: 2018 + parseInt(m[1], 10), month: parseInt(m[2], 10) };
-
-  // H31-12
   m = base.match(/[Hh](\d+)[\-_.年](\d{1,2})/);
   if (m) return { year: 1988 + parseInt(m[1], 10), month: parseInt(m[2], 10) };
-
-  // 2026年4月 / 2026-04 / 2026_04 / 2026.4 / 2026/4
   m = base.match(/(20\d{2})[年\-_./](\d{1,2})/);
   if (m) return { year: parseInt(m[1], 10), month: parseInt(m[2], 10) };
-
-  // 202604 (連続6桁)
   m = base.match(/(20\d{2})(\d{2})/);
   if (m) {
     const mo = parseInt(m[2], 10);
     if (mo >= 1 && mo <= 12) return { year: parseInt(m[1], 10), month: mo };
   }
-
   return null;
 }
 
 // ========== DOM & 状態 ==========
 
-let currentCsvRows = null;       // パース済み全行 (raw)
+let currentCsvRows = null;
 let currentFileName = null;
-let currentResultShifts = null;  // 計算後
-let currentResultRows = null;    // detail 出力用: 全行(not only night)に手当を付与したデータ
+let currentCycles = null;          // 計算後サイクル
+let currentAnnotatedRows = null;   // 全行: { originalIndex, raw, allowance }
 
 const fileInput = document.getElementById('fileInput');
 const fileInfo = document.getElementById('fileInfo');
@@ -258,7 +216,6 @@ async function handleFile(e) {
       <div>読み込み行数: ${currentCsvRows.length}行 (ヘッダー含む)</div>
     `;
 
-    // 年月抽出
     const ym = extractYearMonth(file.name);
     if (ym) {
       yearInput.value = ym.year;
@@ -295,7 +252,6 @@ function runCalculation() {
       return;
     }
 
-    // ヘッダー行から列インデックスを特定
     const header = currentCsvRows[0].map(s => String(s).trim());
     const col = {
       employee: findCol(header, ['ヘルパー', '従業員', '氏名', '名前']),
@@ -311,7 +267,7 @@ function runCalculation() {
 
     const rows = [];
     const errors = [];
-    const annotatedRows = []; // detail 出力用に全行を保持
+    const annotatedRows = [];
 
     for (let i = 1; i < currentCsvRows.length; i++) {
       const r = currentCsvRows[i];
@@ -334,15 +290,19 @@ function runCalculation() {
         continue;
       }
 
+      const startMin = startT.h * 60 + startT.mi;
+      const endMin = endT.h * 60 + endT.mi;
       const start = makeDateTime(year, month, day, startT.h, startT.mi);
       let end = makeDateTime(year, month, day, endT.h, endT.mi);
-      // 「24:00」以外の逆転（例: 22:00-01:00 のような表記が来た場合）は翌日とみなす
       if (end <= start) end = new Date(end.getTime() + 24 * 3600 * 1000);
 
       const rowObj = {
         originalIndex: i,
         raw: r,
         employeeId: emp,
+        day,
+        startMin,
+        endMin,
         start,
         end,
       };
@@ -355,20 +315,25 @@ function runCalculation() {
       return;
     }
 
-    const shifts = applyAllowance(groupShifts(rows));
+    const cycles = computeCycles(rows, year, month);
 
-    // 行へ手当を書き戻し
+    // 行ごとの手当合計: 複数サイクルにまたがる行に備えて加算
     const allowanceByIndex = new Map();
-    for (const shift of shifts) {
-      for (const r of shift.rows) allowanceByIndex.set(r.originalIndex, r.finalAllowance);
+    for (const cyc of cycles) {
+      for (const it of cyc.items) {
+        const prev = allowanceByIndex.get(it.row.originalIndex) || 0;
+        allowanceByIndex.set(it.row.originalIndex, prev + it.allowance);
+      }
     }
     for (const ar of annotatedRows) {
-      ar.allowance = allowanceByIndex.has(ar.originalIndex) ? allowanceByIndex.get(ar.originalIndex) : 0;
+      if ('employeeId' in ar) {
+        ar.allowance = allowanceByIndex.get(ar.originalIndex) || 0;
+      }
     }
 
-    currentResultShifts = shifts;
-    currentResultRows = annotatedRows;
-    renderSummary(shifts, errors, year, month);
+    currentCycles = cycles;
+    currentAnnotatedRows = annotatedRows;
+    renderSummary(cycles, errors, year, month);
     resultSection.hidden = false;
   } catch (err) {
     console.error(err);
@@ -384,24 +349,17 @@ function findCol(header, keywords) {
   return -1;
 }
 
-function renderSummary(shifts, errors, year, month) {
+function renderSummary(cycles, errors, year, month) {
   const fmt = n => '¥' + n.toLocaleString('ja-JP');
-  const fmtDate = d => {
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const h = String(d.getHours()).padStart(2, '0');
-    const mi = String(d.getMinutes()).padStart(2, '0');
-    return `${m}/${day} ${h}:${mi}`;
-  };
 
   const perEmp = new Map();
   let grandTotal = 0;
-  for (const shift of shifts) {
-    const cur = perEmp.get(shift.employeeId) || { total: 0, shifts: 0 };
-    cur.total += shift.finalTotal;
-    cur.shifts += 1;
-    perEmp.set(shift.employeeId, cur);
-    grandTotal += shift.finalTotal;
+  for (const cyc of cycles) {
+    const cur = perEmp.get(cyc.employeeId) || { total: 0, cycles: 0 };
+    cur.total += cyc.allowance;
+    cur.cycles += 1;
+    perEmp.set(cyc.employeeId, cur);
+    grandTotal += cyc.allowance;
   }
 
   let html = '';
@@ -414,25 +372,28 @@ function renderSummary(shifts, errors, year, month) {
   html += `<div class="summary-box">
     <strong>対象年月:</strong> ${year}年${month}月
     <strong>総合計:</strong> ${fmt(grandTotal)}
-    <strong>シフト数:</strong> ${shifts.length}
+    <strong>サイクル数:</strong> ${cycles.length}
     <strong>従業員数:</strong> ${perEmp.size}
   </div>`;
 
-  html += `<h3>従業員別合計</h3><table><thead><tr><th>ヘルパー名</th><th>シフト数</th><th>合計</th></tr></thead><tbody>`;
+  html += `<h3>従業員別合計</h3><table><thead><tr><th>ヘルパー名</th><th>サイクル数</th><th>合計</th></tr></thead><tbody>`;
   const sorted = [...perEmp.entries()].sort((a, b) => b[1].total - a[1].total);
   for (const [emp, v] of sorted) {
-    html += `<tr><td>${escapeHtml(emp)}</td><td class="num">${v.shifts}</td><td class="num">${fmt(v.total)}</td></tr>`;
+    html += `<tr><td>${escapeHtml(emp)}</td><td class="num">${v.cycles}</td><td class="num">${fmt(v.total)}</td></tr>`;
   }
   html += `</tbody></table>`;
 
-  html += `<h3>シフト明細 (先頭30件)</h3><table><thead><tr><th>ヘルパー</th><th>開始</th><th>終了</th><th>行数</th><th>素点</th><th>配分後</th></tr></thead><tbody>`;
-  for (const shift of shifts.slice(0, 30)) {
-    const first = shift.rows[0];
-    const last = shift.rows[shift.rows.length - 1];
-    html += `<tr><td>${escapeHtml(shift.employeeId)}</td><td>${fmtDate(first.start)}</td><td>${fmtDate(last.end)}</td><td class="num">${shift.rows.length}</td><td class="num">${fmt(shift.rawTotal)}</td><td class="num">${fmt(shift.finalTotal)}</td></tr>`;
+  html += `<h3>サイクル明細 (先頭30件)</h3><table><thead><tr><th>ヘルパー</th><th>サイクル日</th><th>夜勤分数</th><th>単位</th><th>手当</th></tr></thead><tbody>`;
+  const cycPreview = [...cycles].sort((a, b) =>
+    a.employeeId.localeCompare(b.employeeId) || a.cycleDay - b.cycleDay
+  ).slice(0, 30);
+  for (const cyc of cycPreview) {
+    const label = cyc.cycleDay === 0 ? `月跨ぎ(前月→1日)` :
+      `${cyc.month}/${cyc.cycleDay} → ${cyc.month}/${cyc.cycleDay + 1}`;
+    html += `<tr><td>${escapeHtml(cyc.employeeId)}</td><td>${label}</td><td class="num">${cyc.totalMin}分</td><td class="num">${cyc.units}</td><td class="num">${fmt(cyc.allowance)}</td></tr>`;
   }
   html += `</tbody></table>`;
-  if (shifts.length > 30) html += `<p class="muted">...他 ${shifts.length - 30} 件</p>`;
+  if (cycles.length > 30) html += `<p class="muted">...他 ${cycles.length - 30} 件</p>`;
 
   summaryDiv.innerHTML = html;
 }
@@ -440,36 +401,34 @@ function renderSummary(shifts, errors, year, month) {
 // ========== CSV 出力 ==========
 
 function downloadCSV(mode) {
-  if (!currentResultShifts) return;
+  if (!currentCycles) return;
   const base = (currentFileName || 'result.csv').replace(/\.csv$/i, '');
   let csvText;
   let outName;
 
   if (mode === 'summary') {
-    const rows = [['ヘルパー名', 'シフト数', '夜勤手当（円）']];
+    const rows = [['ヘルパー名', 'サイクル数', '夜勤手当（円）']];
     const perEmp = new Map();
-    for (const shift of currentResultShifts) {
-      const cur = perEmp.get(shift.employeeId) || { total: 0, shifts: 0 };
-      cur.total += shift.finalTotal;
-      cur.shifts += 1;
-      perEmp.set(shift.employeeId, cur);
+    for (const cyc of currentCycles) {
+      const cur = perEmp.get(cyc.employeeId) || { total: 0, cycles: 0 };
+      cur.total += cyc.allowance;
+      cur.cycles += 1;
+      perEmp.set(cyc.employeeId, cur);
     }
-    const sorted = [...perEmp.entries()].sort((a, b) => b[1].total - a[1].total);
+    const sorted = [...perEmp.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     let grandTotal = 0;
     for (const [emp, v] of sorted) {
-      rows.push([emp, String(v.shifts), String(v.total)]);
+      rows.push([emp, String(v.cycles), String(v.total)]);
       grandTotal += v.total;
     }
     rows.push(['合計', '', String(grandTotal)]);
     csvText = toCSVText(rows);
     outName = `${base}_夜勤手当_集計.csv`;
   } else if (mode === 'detail') {
-    // 元CSV + 末尾「夜勤手当」列
     const header = [...currentCsvRows[0], '夜勤手当'];
     const rows = [header];
-    for (const ar of currentResultRows) {
+    for (const ar of currentAnnotatedRows) {
       const raw = [...(ar.raw || [])];
-      // 元CSVと列数が合わないケースをパディング
       while (raw.length < currentCsvRows[0].length) raw.push('');
       raw.push(ar.allowance != null ? String(ar.allowance) : '');
       rows.push(raw);
@@ -480,7 +439,6 @@ function downloadCSV(mode) {
     return;
   }
 
-  // UTF-8 BOM を付けてExcelで正しく開けるようにする
   const bom = '\uFEFF';
   const blob = new Blob([bom + csvText], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -514,112 +472,145 @@ function escapeHtml(s) {
 // ========== テスト ==========
 
 function runTests() {
-  const cases = [];
-
-  function mkDate(s) { return new Date(s.replace(/\//g, '-')); }
-  function rowOf(emp, startStr, endStr, idx = 0) {
-    return { originalIndex: idx, employeeId: emp, start: mkDate(startStr), end: mkDate(endStr) };
+  // テストはCSV→行構造を疑似的に作って computeCycles を呼ぶ
+  function makeRow(emp, day, startStr, endStr, year = 2026, month = 4, idx = 0) {
+    const sT = parseTime(startStr);
+    const eT = parseTime(endStr);
+    const startMin = sT.h * 60 + sT.mi;
+    const endMin = eT.h * 60 + eT.mi;
+    const start = makeDateTime(year, month, day, sT.h, sT.mi);
+    let end = makeDateTime(year, month, day, eT.h, eT.mi);
+    if (end <= start) end = new Date(end.getTime() + 24 * 3600 * 1000);
+    return {
+      originalIndex: idx,
+      employeeId: emp,
+      day,
+      startMin,
+      endMin,
+      start,
+      end,
+    };
   }
 
-  // T1: 仕様書例 (2行分割・上限超過・FIFO)
-  // Row1: 20:00-24:00 night=120min → ceil(120/30)*500 = 2000
-  // Row2: 00:00-07:00 night=420min → ceil(420/30)*500 = 7000
-  // raw=9000 → cap 5000; FIFO: 2000, 3000
+  const cases = [];
+
+  // T1: 20:00-翌7:00 (2行分割)
+  // cycle day=10: 22-24 (120min) + 0-7 (420min) = 540min → floor(540/30)=18 → 9000 → cap 5000
+  // FIFO: cum=120→2000, cum=540→5000 → 行別 [2000, 3000]
   cases.push({
     name: 'T1: 20:00-翌7:00 (2行分割・上限超過)',
     rows: [
-      rowOf('A', '2026-04-10T20:00', '2026-04-11T00:00', 0),
-      rowOf('A', '2026-04-11T00:00', '2026-04-11T07:00', 1),
+      makeRow('A', 10, '20:00', '24:00', 2026, 4, 0),
+      makeRow('A', 11, '00:00', '7:00', 2026, 4, 1),
     ],
-    expect: { perRow: [2000, 3000], shiftTotal: 5000 },
+    expect: { perRow: [2000, 3000], cycleAllowance: 5000, cycleCount: 1 },
   });
 
-  // T2: 5h (22:00-03:00) → night=300min → ceil(300/30)*500 = 5000
+  // T2: 22:00-翌3:00 (2行分割) 夜勤300分 → floor(300/30)*500 = 5000 (上限ちょうど)
   cases.push({
     name: 'T2: 夜勤帯のみ5h (上限ちょうど)',
-    rows: [rowOf('B', '2026-04-10T22:00', '2026-04-11T03:00', 0)],
-    expect: { perRow: [5000], shiftTotal: 5000 },
+    rows: [
+      makeRow('B', 10, '22:00', '24:00', 2026, 4, 0),
+      makeRow('B', 11, '00:00', '3:00', 2026, 4, 1),
+    ],
+    expect: { perRow: [2000, 3000], cycleAllowance: 5000, cycleCount: 1 },
   });
 
-  // T3: 3h (22:00-01:00) → night=180min → ceil(180/30)*500 = 3000
+  // T3: 22:00-翌1:00 (180min) → floor(180/30)*500=3000
   cases.push({
     name: 'T3: 夜勤帯3h',
-    rows: [rowOf('C', '2026-04-10T22:00', '2026-04-11T01:00', 0)],
-    expect: { perRow: [3000], shiftTotal: 3000 },
+    rows: [
+      makeRow('C', 10, '22:00', '24:00', 2026, 4, 0),
+      makeRow('C', 11, '00:00', '1:00', 2026, 4, 1),
+    ],
+    expect: { perRow: [2000, 1000], cycleAllowance: 3000, cycleCount: 1 },
   });
 
   // T4: 夜勤帯ゼロ
   cases.push({
-    name: 'T4: 夜勤帯ゼロ',
-    rows: [rowOf('D', '2026-04-10T09:00', '2026-04-10T17:00', 0)],
-    expect: { perRow: [0], shiftTotal: 0 },
+    name: 'T4: 夜勤帯ゼロ (09:00-17:00)',
+    rows: [makeRow('D', 10, '9:00', '17:00', 2026, 4, 0)],
+    expect: { perRow: [], cycleAllowance: 0, cycleCount: 0 },
   });
 
-  // T5: 切り上げテスト: 10分 → 500, 40分 → 1000, 70分 → 1500
-  // 22:00-22:10 (10min) → 500
+  // T5: 切り上げ 10分 → ceil(10/30)=1 → 500円
   cases.push({
     name: 'T5: 切り上げ 10分 → 500円',
-    rows: [rowOf('E1', '2026-04-10T22:00', '2026-04-10T22:10', 0)],
-    expect: { perRow: [500], shiftTotal: 500 },
+    rows: [makeRow('E1', 10, '22:00', '22:10', 2026, 4, 0)],
+    expect: { perRow: [500], cycleAllowance: 500, cycleCount: 1 },
   });
-  // 22:00-22:40 (40min) → ceil(40/30)=2 → 1000
+
+  // T6: 40分 → ceil(40/30)=2 → 1000円
   cases.push({
     name: 'T6: 切り上げ 40分 → 1000円',
-    rows: [rowOf('E2', '2026-04-10T22:00', '2026-04-10T22:40', 0)],
-    expect: { perRow: [1000], shiftTotal: 1000 },
+    rows: [makeRow('E2', 10, '22:00', '22:40', 2026, 4, 0)],
+    expect: { perRow: [1000], cycleAllowance: 1000, cycleCount: 1 },
   });
-  // 22:00-23:10 (70min) → ceil(70/30)=3 → 1500
+
+  // T7: 70分 → ceil(70/30)=3 → 1500円
   cases.push({
     name: 'T7: 切り上げ 70分 → 1500円',
-    rows: [rowOf('E3', '2026-04-10T22:00', '2026-04-10T23:10', 0)],
-    expect: { perRow: [1500], shiftTotal: 1500 },
+    rows: [makeRow('E3', 10, '22:00', '23:10', 2026, 4, 0)],
+    expect: { perRow: [1500], cycleAllowance: 1500, cycleCount: 1 },
   });
 
-  // T8: 夜勤帯30分ピッタリ → 500円
+  // T8: 30分ちょうど → ceil(30/30)=1 → 500円
   cases.push({
     name: 'T8: 30分ちょうど → 500円',
-    rows: [rowOf('F', '2026-04-10T22:00', '2026-04-10T22:30', 0)],
-    expect: { perRow: [500], shiftTotal: 500 },
+    rows: [makeRow('F', 10, '22:00', '22:30', 2026, 4, 0)],
+    expect: { perRow: [500], cycleAllowance: 500, cycleCount: 1 },
   });
 
-  // T9: 3行にまたがるシフト (合計上限)
-  // 20:00-23:00 → night 60min (22-23) → 1000
-  // 23:00-00:00 → night 60min → 1000
-  // 00:00-07:00 → night 420min → 7000
-  // raw = 9000 → cap 5000; FIFO: 1000, 1000, 3000
+  // T9: 3行シフト
+  // Row1 20-23 (night 60min), Row2 23-24 (60min), Row3 0-7 (420min)
+  // cum: 60→1000, 120→2000, 540→5000 (cap)
+  // 配分: 1000, 1000, 3000
   cases.push({
-    name: 'T9: 3行シフト (FIFO)',
+    name: 'T9: 3行サイクル (FIFO 累積配分)',
     rows: [
-      rowOf('G', '2026-04-10T20:00', '2026-04-10T23:00', 0),
-      rowOf('G', '2026-04-10T23:00', '2026-04-11T00:00', 1),
-      rowOf('G', '2026-04-11T00:00', '2026-04-11T07:00', 2),
+      makeRow('G', 10, '20:00', '23:00', 2026, 4, 0),
+      makeRow('G', 10, '23:00', '24:00', 2026, 4, 1),
+      makeRow('G', 11, '00:00', '7:00', 2026, 4, 2),
     ],
-    expect: { perRow: [1000, 1000, 3000], shiftTotal: 5000 },
+    expect: { perRow: [1000, 1000, 3000], cycleAllowance: 5000, cycleCount: 1 },
   });
 
-  // T10: 非連続シフト (個別に上限) - 2シフト
+  // T10: 非連続 2サイクル (4/10, 4/15)
   cases.push({
-    name: 'T10: 非連続 (個別上限)',
+    name: 'T10: 非連続 (個別上限・2サイクル)',
     rows: [
-      rowOf('H', '2026-04-10T22:00', '2026-04-11T08:00', 0), // 600min → 10000 → 5000
-      rowOf('H', '2026-04-15T22:00', '2026-04-16T08:00', 1), // 同上
+      makeRow('H', 10, '22:00', '24:00', 2026, 4, 0),
+      makeRow('H', 11, '00:00', '8:00', 2026, 4, 1),
+      makeRow('H', 15, '22:00', '24:00', 2026, 4, 2),
+      makeRow('H', 16, '00:00', '8:00', 2026, 4, 3),
     ],
-    expect: { perRow: [5000, 5000], shiftTotal: null },
+    expect: { perRow: [2000, 3000, 2000, 3000], cycleAllowance: null, cycleCount: 2 },
   });
 
   let passCount = 0;
   let html = '<table class="test-table"><thead><tr><th>#</th><th>ケース</th><th>期待(行別)</th><th>実測(行別)</th><th>結果</th></tr></thead><tbody>';
   for (let i = 0; i < cases.length; i++) {
     const c = cases[i];
-    const shifts = applyAllowance(groupShifts(c.rows));
-    const actualPerRow = [];
-    for (const s of shifts) for (const r of s.rows) actualPerRow.push(r.finalAllowance);
-    const rowsMatch = JSON.stringify(actualPerRow) === JSON.stringify(c.expect.perRow);
-    let shiftMatch = true;
-    if (c.expect.shiftTotal != null) {
-      shiftMatch = shifts.length === 1 && shifts[0].finalTotal === c.expect.shiftTotal;
+    const cycles = computeCycles(c.rows, 2026, 4);
+
+    // 行別手当を originalIndex 順に集計
+    const byIdx = new Map();
+    for (const cyc of cycles) {
+      for (const it of cyc.items) {
+        byIdx.set(it.row.originalIndex, (byIdx.get(it.row.originalIndex) || 0) + it.allowance);
+      }
     }
-    const pass = rowsMatch && shiftMatch;
+    const actualPerRow = [];
+    for (const r of c.rows) {
+      if (byIdx.has(r.originalIndex)) actualPerRow.push(byIdx.get(r.originalIndex));
+    }
+
+    const rowsMatch = JSON.stringify(actualPerRow) === JSON.stringify(c.expect.perRow);
+    let cycleMatch = cycles.length === c.expect.cycleCount;
+    if (c.expect.cycleAllowance != null && cycles.length === 1) {
+      cycleMatch = cycleMatch && cycles[0].allowance === c.expect.cycleAllowance;
+    }
+    const pass = rowsMatch && cycleMatch;
     if (pass) passCount++;
     html += `<tr class="${pass ? 'pass' : 'fail'}"><td>${i + 1}</td><td>${escapeHtml(c.name)}</td><td>${JSON.stringify(c.expect.perRow)}</td><td>${JSON.stringify(actualPerRow)}</td><td>${pass ? 'PASS' : 'FAIL'}</td></tr>`;
   }
