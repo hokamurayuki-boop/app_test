@@ -1,183 +1,69 @@
+/* =========================================================
+   夜勤手当計算アプリ — Soft Care Dashboard
+   ========================================================= */
+
 :root {
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --bg: #f8fafc;
-  --card-bg: #ffffff;
-  --border: #e2e8f0;
-  --text: #0f172a;
-  --muted: #64748b;
-  --error: #dc2626;
-  --success: #16a34a;
-  --warning: #f59e0b;
+  /* カラートークン */
+  --bg:        #efe7da;
+  --surface:   #fff8ee;
+  --surface-2: #f4ebe0;
+  --ink:       #3a2a1e;
+  --ink-soft:  #8a6a4d;
+  --accent:    #8a3b0e;
+  --accent-2:  #c98762;
+  --line:      #eadac5;
+  --danger:    #b2453c;
+  --ok:        #6a7f4a;
+  --cap:       #b06016;
+
+  /* フォントスタック（オフライン時フォールバック） */
+  --font-display: 'Shippori Mincho', 'Yu Mincho', 'Hiragino Mincho ProN', serif;
+  --font-serif:   'Fraunces', 'Times New Roman', Georgia, serif;
+  --font-sans:    'Zen Kaku Gothic New', 'Hiragino Sans', 'Yu Gothic UI', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+
+  /* 装飾 */
+  --shadow-sm: 0 2px 6px rgba(126, 82, 44, 0.08);
+  --shadow-md: 0 6px 20px rgba(126, 82, 44, 0.10);
+  --shadow-lg: 0 14px 30px rgba(126, 82, 44, 0.18);
+  --radius:    14px;
+  --radius-lg: 20px;
 }
 
-* { box-sizing: border-box; }
+/* リセット */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
+input { font: inherit; color: inherit; }
+h1, h2, h3, h4, h5, h6, p, ul, ol { margin: 0; padding: 0; }
+ul { list-style-position: inside; }
+[hidden] { display: none !important; }
 
+/* ベース */
 body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.65;
   background: var(--bg);
-  color: var(--text);
+  color: var(--ink);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ユーティリティ（renderSummary が注入するクラス用の基底） */
+.note, .muted {
+  color: var(--ink-soft);
+  font-size: 12px;
   line-height: 1.6;
 }
 
-header {
-  background: linear-gradient(135deg, #1e3a8a, #2563eb);
-  color: white;
-  padding: 2rem 1rem;
-  text-align: center;
+/* reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
-
-header h1 {
-  margin: 0 0 0.5rem 0;
-  font-size: 1.75rem;
-}
-
-header .lead { margin: 0.25rem 0; opacity: 0.95; }
-header .privacy {
-  margin: 0.5rem 0 0;
-  font-size: 0.875rem;
-  opacity: 0.9;
-}
-
-main {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 1.5rem 1rem;
-}
-
-.card {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.25rem 1.5rem;
-  margin-bottom: 1rem;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-}
-
-.card h2 {
-  margin: 0 0 0.75rem 0;
-  font-size: 1.125rem;
-  border-bottom: 2px solid var(--primary);
-  padding-bottom: 0.25rem;
-  display: inline-block;
-}
-
-.form-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin: 0.5rem 0;
-}
-
-.form-row label {
-  min-width: 120px;
-  font-weight: 500;
-}
-
-.form-row input,
-.form-row select {
-  flex: 1;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 0.95rem;
-  max-width: 420px;
-}
-
-input[type="file"] {
-  padding: 0.5rem;
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-  width: 100%;
-}
-
-button {
-  background: #e2e8f0;
-  color: var(--text);
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  font-size: 0.95rem;
-  cursor: pointer;
-  margin-top: 0.5rem;
-}
-
-button:hover { background: #cbd5e1; }
-
-button.primary {
-  background: var(--primary);
-  color: white;
-}
-
-button.primary:hover { background: var(--primary-hover); }
-
-.muted { color: var(--muted); font-size: 0.875rem; }
-
-.error {
-  background: #fef2f2;
-  border-left: 4px solid var(--error);
-  padding: 0.75rem 1rem;
-  margin: 0.5rem 0;
-  color: var(--error);
-  border-radius: 4px;
-}
-
-.summary-box {
-  background: #eff6ff;
-  border-left: 4px solid var(--primary);
-  padding: 0.75rem 1rem;
-  margin: 0.75rem 0;
-  font-size: 1.05rem;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0.5rem 0 1rem;
-  font-size: 0.9rem;
-}
-
-table th, table td {
-  border: 1px solid var(--border);
-  padding: 0.4rem 0.6rem;
-  text-align: left;
-}
-
-table th {
-  background: #f1f5f9;
-  font-weight: 600;
-}
-
-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-
-.test-table tr.pass td { background: #f0fdf4; }
-.test-table tr.fail td { background: #fef2f2; color: var(--error); }
-.test-table tr.pass td:last-child { color: var(--success); font-weight: bold; }
-.test-table tr.fail td:last-child { font-weight: bold; }
-
-footer {
-  text-align: center;
-  padding: 2rem 1rem;
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
-@media (max-width: 600px) {
-  .form-row { flex-direction: column; align-items: stretch; }
-  .form-row label { min-width: auto; }
-  .form-row input, .form-row select { max-width: none; }
-}
-
-.button-row {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-top: 1rem;
-}
-
-.muted.success { color: var(--success); }
-.muted.warning { color: var(--warning); }
-
-.summary-box strong { margin-right: 0.25rem; }
-.summary-box strong + strong { margin-left: 1rem; }
