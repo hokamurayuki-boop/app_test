@@ -34,15 +34,15 @@
       </header>
       <div class="form-row">
         <label for="fileInput">当月CSV<span class="req">必須</span></label>
-        <input type="file" id="fileInput" accept=".csv">
+        <input type="file" id="fileInput" accept=".csv" multiple>
       </div>
       <div id="fileInfo" class="file-info"></div>
       <div class="form-row">
         <label for="prevFileInput">前月CSV<span class="opt">任意</span></label>
-        <input type="file" id="prevFileInput" accept=".csv">
+        <input type="file" id="prevFileInput" accept=".csv" multiple>
       </div>
       <div id="prevFileInfo" class="file-info"></div>
-      <p class="note">前月CSVを指定すると、当月1日0〜8時の夜勤手当を前月末22〜24時分と合算し、5000円上限を月跨ぎで正しく適用します。</p>
+      <p class="note">複数の事業所をまとめて計算可能。ファイル名に事業所名を含め、前月・当月で事業所名を揃えてください（例: 事業所A_2026年4月.csv / 事業所A_2026年5月.csv）。前月CSVを指定すると月跨ぎの5000円上限が正しく適用されます。</p>
     </section>
 
     <section class="step-card" id="configSection" hidden>

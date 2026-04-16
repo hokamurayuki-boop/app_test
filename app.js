@@ -179,15 +179,26 @@ function extractYearMonth(filename) {
   return null;
 }
 
+/** ファイル名から事業所名を抽出（年月トークン・拡張子・前後区切りを除去） */
+function extractOfficeName(filename) {
+  let base = filename.replace(/\.[^.]+$/, '');
+  base = base.replace(/令和\d+年\d{1,2}月/g, '');
+  base = base.replace(/平成\d+年\d{1,2}月/g, '');
+  base = base.replace(/[Rr]\d+[\-_.年]\d{1,2}月?/g, '');
+  base = base.replace(/[Hh]\d+[\-_.年]\d{1,2}月?/g, '');
+  base = base.replace(/20\d{2}[年\-_./]\d{1,2}月?/g, '');
+  base = base.replace(/20\d{2}\d{2}/g, '');
+  base = base.replace(/^[_\-\s.]+|[_\-\s.]+$/g, '').trim();
+  return base || '(未分類)';
+}
+
 // ========== DOM & 状態 ==========
 
-let currentCsvRows = null;
-let currentFileName = null;
-let currentCycles = null;          // 計算後サイクル
-let currentAnnotatedRows = null;   // 全行: { originalIndex, raw, allowance }
-let prevCsvRows = null;
-let prevFileName = null;
-let prevYM = null;                 // { year, month } — 前月CSVから抽出
+// 事業所名 → { csvRows, fileName, ym }
+let currentOffices = new Map();
+let prevOffices = new Map();
+// 事業所名 → { officeName, cycles, annotatedRows, primaryCsvRows, primaryFileName, errors, year, month, hasPrev }
+let officeResults = new Map();
 
 const fileInput = document.getElementById('fileInput');
 const prevFileInput = document.getElementById('prevFileInput');
@@ -212,33 +223,65 @@ if (downloadSummaryBtn) downloadSummaryBtn.addEventListener('click', () => downl
 if (downloadDetailBtn) downloadDetailBtn.addEventListener('click', () => downloadCSV('detail'));
 if (testBtn) testBtn.addEventListener('click', runTests);
 
-async function handleFile(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  currentFileName = file.name;
-
-  try {
+async function loadCsvFiles(files) {
+  const results = [];
+  for (const file of files) {
     const buf = await file.arrayBuffer();
     const text = decodeCSV(buf);
-    currentCsvRows = parseCSV(text);
+    const csvRows = parseCSV(text);
+    results.push({
+      fileName: file.name,
+      size: file.size,
+      csvRows,
+      ym: extractYearMonth(file.name),
+      office: extractOfficeName(file.name),
+    });
+  }
+  return results;
+}
 
-    fileInfo.innerHTML = `
-      <div>当月: <strong>${escapeHtml(file.name)}</strong> (${(file.size / 1024).toFixed(1)} KB)</div>
-      <div>読み込み行数: ${currentCsvRows.length}行 (ヘッダー含む)</div>
-    `;
+function renderFileList(offices, labelJa) {
+  if (offices.size === 0) return '';
+  const items = [...offices.entries()].map(([office, data]) => {
+    const ymLabel = data.ym ? `${data.ym.year}年${data.ym.month}月` : '年月抽出不可';
+    return `<li><strong>${escapeHtml(office)}</strong> — ${escapeHtml(data.fileName)} (${escapeHtml(ymLabel)}・${data.csvRows.length - 1}行)</li>`;
+  }).join('');
+  return `<div>${escapeHtml(labelJa)}: ${offices.size}事業所</div><ul class="file-list">${items}</ul>`;
+}
 
-    const ym = extractYearMonth(file.name);
-    if (ym) {
+async function handleFile(e) {
+  const files = [...e.target.files];
+  if (files.length === 0) return;
+  try {
+    const loaded = await loadCsvFiles(files);
+    currentOffices.clear();
+    for (const f of loaded) {
+      if (currentOffices.has(f.office)) {
+        fileInfo.innerHTML = `<div class="error">事業所名が重複しています: "${escapeHtml(f.office)}"。ファイル名を区別してください。</div>`;
+        currentOffices.clear();
+        return;
+      }
+      currentOffices.set(f.office, { csvRows: f.csvRows, fileName: f.fileName, ym: f.ym });
+    }
+    fileInfo.innerHTML = renderFileList(currentOffices, '当月');
+
+    // 年月の自動抽出: 全ファイルで一致していれば採用、不一致なら警告
+    const ymSet = new Set([...currentOffices.values()].filter(o => o.ym).map(o => `${o.ym.year}-${o.ym.month}`));
+    if (ymSet.size === 1) {
+      const ym = [...currentOffices.values()].find(o => o.ym).ym;
       yearInput.value = ym.year;
       monthInput.value = ym.month;
-      ymSource.textContent = `✓ ファイル名から自動抽出: ${ym.year}年${ym.month}月`;
-      ymSource.className = 'muted success';
+      ymSource.textContent = `✓ ファイル名から抽出: ${ym.year}年${ym.month}月（${currentOffices.size}事業所）`;
+      ymSource.className = 'ym-source success';
+    } else if (ymSet.size > 1) {
+      ymSource.textContent = `⚠ 当月ファイル間で年月が一致しません: ${[...ymSet].join(', ')}`;
+      ymSource.className = 'ym-source warning';
     } else {
       const now = new Date();
       if (!yearInput.value) yearInput.value = now.getFullYear();
       if (!monthInput.value) monthInput.value = now.getMonth() + 1;
       ymSource.textContent = `⚠ ファイル名から年月を抽出できませんでした。手動で入力してください。`;
-      ymSource.className = 'muted warning';
+      ymSource.className = 'ym-source warning';
     }
 
     configSection.hidden = false;
@@ -250,32 +293,28 @@ async function handleFile(e) {
 }
 
 async function handlePrevFile(e) {
-  const file = e.target.files[0];
-  if (!file) {
-    prevCsvRows = null;
-    prevFileName = null;
-    prevYM = null;
+  const files = [...e.target.files];
+  if (files.length === 0) {
+    prevOffices.clear();
     prevFileInfo.innerHTML = '';
     return;
   }
-  prevFileName = file.name;
-
   try {
-    const buf = await file.arrayBuffer();
-    const text = decodeCSV(buf);
-    prevCsvRows = parseCSV(text);
-    prevYM = extractYearMonth(file.name);
-
-    const ymLabel = prevYM ? `${prevYM.year}年${prevYM.month}月` : '年月抽出不可（手動入力の当月の前月として扱います）';
-    prevFileInfo.innerHTML = `
-      <div>前月: <strong>${escapeHtml(file.name)}</strong> (${(file.size / 1024).toFixed(1)} KB) — ${escapeHtml(ymLabel)}</div>
-      <div>読み込み行数: ${prevCsvRows.length}行 (ヘッダー含む)</div>
-    `;
+    const loaded = await loadCsvFiles(files);
+    prevOffices.clear();
+    for (const f of loaded) {
+      if (prevOffices.has(f.office)) {
+        prevFileInfo.innerHTML = `<div class="error">前月CSVで事業所名が重複しています: "${escapeHtml(f.office)}"。</div>`;
+        prevOffices.clear();
+        return;
+      }
+      prevOffices.set(f.office, { csvRows: f.csvRows, fileName: f.fileName, ym: f.ym });
+    }
+    prevFileInfo.innerHTML = renderFileList(prevOffices, '前月');
   } catch (err) {
     console.error(err);
     prevFileInfo.innerHTML = `<div class="error">前月CSV読み込みエラー: ${escapeHtml(err.message)}</div>`;
-    prevCsvRows = null;
-    prevYM = null;
+    prevOffices.clear();
   }
 }
 
@@ -347,11 +386,57 @@ function previousYearMonth(year, month) {
   return { year, month: month - 1 };
 }
 
+/** 1事業所ぶんを計算。prevOffice が未提供なら単月計算 */
+function computeOffice(officeName, currentData, prevData, year, month) {
+  const errors = [];
+  const primary = parseRowsFromCsv(currentData.csvRows, year, month, { isPrimary: true, originPrefix: `[${officeName}] ` });
+  errors.push(...primary.errors);
+
+  let prev = null;
+  if (prevData) {
+    const expectedPrev = previousYearMonth(year, month);
+    const pYear = prevData.ym ? prevData.ym.year : expectedPrev.year;
+    const pMonth = prevData.ym ? prevData.ym.month : expectedPrev.month;
+    if (prevData.ym && (prevData.ym.year !== expectedPrev.year || prevData.ym.month !== expectedPrev.month)) {
+      errors.push(`[${officeName}] 前月CSVの年月 (${prevData.ym.year}年${prevData.ym.month}月) が当月の直前月 (${expectedPrev.year}年${expectedPrev.month}月) と一致しません。`);
+    }
+    prev = parseRowsFromCsv(prevData.csvRows, pYear, pMonth, { isPrimary: false, originPrefix: `[${officeName}] 前月 ` });
+    errors.push(...prev.errors);
+  }
+
+  const allRows = prev ? primary.rows.concat(prev.rows) : primary.rows;
+  const cycles = computeCycles(allRows);
+
+  const allowanceByIndex = new Map();
+  for (const cyc of cycles) {
+    for (const it of cyc.items) {
+      if (!it.row.isPrimary) continue;
+      allowanceByIndex.set(it.row.originalIndex, (allowanceByIndex.get(it.row.originalIndex) || 0) + it.allowance);
+    }
+  }
+  for (const ar of primary.annotatedRows) {
+    if ('employeeId' in ar) {
+      ar.allowance = allowanceByIndex.get(ar.originalIndex) || 0;
+    }
+  }
+
+  return {
+    officeName,
+    cycles,
+    annotatedRows: primary.annotatedRows,
+    primaryCsvRows: currentData.csvRows,
+    primaryFileName: currentData.fileName,
+    errors,
+    year, month,
+    hasPrev: !!prev,
+  };
+}
+
 function runCalculation() {
   try {
     summaryDiv.innerHTML = '';
-    if (!currentCsvRows || currentCsvRows.length < 2) {
-      summaryDiv.innerHTML = `<div class="error">CSVが読み込まれていません。</div>`;
+    if (currentOffices.size === 0) {
+      summaryDiv.innerHTML = `<div class="error">当月CSVが読み込まれていません。</div>`;
       return;
     }
     const year = parseInt(yearInput.value, 10);
@@ -361,47 +446,23 @@ function runCalculation() {
       return;
     }
 
-    const primary = parseRowsFromCsv(currentCsvRows, year, month, { isPrimary: true, originPrefix: '' });
-    const errors = [...primary.errors];
+    officeResults.clear();
+    const globalErrors = [];
 
-    let prev = null;
-    if (prevCsvRows && prevCsvRows.length >= 2) {
-      const expectedPrev = previousYearMonth(year, month);
-      const pYear = prevYM ? prevYM.year : expectedPrev.year;
-      const pMonth = prevYM ? prevYM.month : expectedPrev.month;
-      if (prevYM && (prevYM.year !== expectedPrev.year || prevYM.month !== expectedPrev.month)) {
-        errors.push(`前月CSVの年月 (${prevYM.year}年${prevYM.month}月) は当月の直前月 (${expectedPrev.year}年${expectedPrev.month}月) と一致しません。`);
-      }
-      prev = parseRowsFromCsv(prevCsvRows, pYear, pMonth, { isPrimary: false, originPrefix: '前月CSV ' });
-      errors.push(...prev.errors);
-    }
-
-    if (primary.rows.length === 0) {
-      summaryDiv.innerHTML = `<div class="error">有効な勤怠行が見つかりませんでした。</div>`;
-      return;
-    }
-
-    const allRows = prev ? primary.rows.concat(prev.rows) : primary.rows;
-    const cycles = computeCycles(allRows);
-
-    // 行ごとの手当合計: 当月行のみ集計 (originalIndex が当月と前月で被らないよう分離判定)
-    const allowanceByIndex = new Map();
-    for (const cyc of cycles) {
-      for (const it of cyc.items) {
-        if (!it.row.isPrimary) continue;
-        const pAll = allowanceByIndex.get(it.row.originalIndex) || 0;
-        allowanceByIndex.set(it.row.originalIndex, pAll + it.allowance);
-      }
-    }
-    for (const ar of primary.annotatedRows) {
-      if ('employeeId' in ar) {
-        ar.allowance = allowanceByIndex.get(ar.originalIndex) || 0;
+    // 前月CSVだけある事業所（当月未提出）の警告
+    for (const prevOffice of prevOffices.keys()) {
+      if (!currentOffices.has(prevOffice)) {
+        globalErrors.push(`前月CSVのみ存在する事業所 "${prevOffice}" は当月CSVがないためスキップします。`);
       }
     }
 
-    currentCycles = cycles;
-    currentAnnotatedRows = primary.annotatedRows;
-    renderSummary(cycles, errors, year, month);
+    for (const [officeName, currData] of currentOffices) {
+      const prevData = prevOffices.get(officeName) || null;
+      const result = computeOffice(officeName, currData, prevData, year, month);
+      officeResults.set(officeName, result);
+    }
+
+    renderSummary(officeResults, globalErrors, year, month);
     resultSection.hidden = false;
   } catch (err) {
     console.error(err);
@@ -417,12 +478,11 @@ function findCol(header, keywords) {
   return -1;
 }
 
-function renderSummary(cycles, errors, year, month) {
+/** 1事業所の primary サイクルを集計 */
+function summarizeOfficePrimary(result) {
   const fmt = n => '¥' + n.toLocaleString('ja-JP');
-
-  // 当月行を含むサイクルのみ表示・集計対象 (前月行のみのサイクルは当月には関係ない)
   const primaryCycles = [];
-  for (const cyc of cycles) {
+  for (const cyc of result.cycles) {
     let primaryAllow = 0;
     let primaryMin = 0;
     for (const it of cyc.items) {
@@ -433,109 +493,168 @@ function renderSummary(cycles, errors, year, month) {
     }
     if (primaryMin > 0) primaryCycles.push({ cyc, primaryAllow, primaryMin });
   }
-
   const perEmp = new Map();
-  let grandTotal = 0;
+  let total = 0;
   for (const { cyc, primaryAllow } of primaryCycles) {
     const cur = perEmp.get(cyc.employeeId) || { total: 0, cycles: 0 };
     cur.total += primaryAllow;
     cur.cycles += 1;
     perEmp.set(cyc.employeeId, cur);
-    grandTotal += primaryAllow;
+    total += primaryAllow;
+  }
+  return { primaryCycles, perEmp, total, fmt };
+}
+
+function renderSummary(results, errors, year, month) {
+  const fmt = n => '¥' + n.toLocaleString('ja-JP');
+
+  // 事業所別に集計
+  const officeSummaries = [];
+  let grandTotal = 0;
+  let totalCycles = 0;
+  let totalOfficesWithData = 0;
+  const allErrors = [...errors];
+  for (const [officeName, result] of results) {
+    const s = summarizeOfficePrimary(result);
+    officeSummaries.push({ officeName, result, ...s });
+    grandTotal += s.total;
+    totalCycles += s.primaryCycles.length;
+    if (s.perEmp.size > 0) totalOfficesWithData++;
+    allErrors.push(...result.errors);
   }
 
   let html = '';
-  if (errors.length > 0) {
-    const errList = errors.slice(0, 10).map(e => `<li>${escapeHtml(e)}</li>`).join('');
-    const more = errors.length > 10 ? `<li>...他${errors.length - 10}件</li>` : '';
-    html += `<div class="error"><strong>警告 (${errors.length}件):</strong><ul>${errList}${more}</ul></div>`;
+  if (allErrors.length > 0) {
+    const errList = allErrors.slice(0, 15).map(e => `<li>${escapeHtml(e)}</li>`).join('');
+    const more = allErrors.length > 15 ? `<li>...他${allErrors.length - 15}件</li>` : '';
+    html += `<div class="error"><strong>警告 (${allErrors.length}件):</strong><ul>${errList}${more}</ul></div>`;
   }
 
+  // 全体合算
   html += `<div class="summary-box">
     <strong>対象年月:</strong> ${year}年${month}月
-    <strong>当月合計:</strong> ${fmt(grandTotal)}
-    <strong>サイクル数:</strong> ${primaryCycles.length}
-    <strong>従業員数:</strong> ${perEmp.size}
+    <strong>全事業所合計:</strong> ${fmt(grandTotal)}
+    <strong>事業所数:</strong> ${results.size}
+    <strong>サイクル数:</strong> ${totalCycles}
   </div>`;
 
-  html += `<h3>従業員別合計</h3><table><thead><tr><th>ヘルパー名</th><th>サイクル数</th><th>合計</th></tr></thead><tbody>`;
-  const sorted = [...perEmp.entries()].sort((a, b) => b[1].total - a[1].total);
-  for (const [emp, v] of sorted) {
-    html += `<tr><td>${escapeHtml(emp)}</td><td class="num">${v.cycles}</td><td class="num">${fmt(v.total)}</td></tr>`;
+  // 事業所別の総額ランキング
+  if (results.size > 1) {
+    html += `<h3>事業所別合計</h3><table><thead><tr><th>事業所</th><th>前月</th><th>サイクル数</th><th>合計</th></tr></thead><tbody>`;
+    const sortedOffices = [...officeSummaries].sort((a, b) => b.total - a.total);
+    for (const os of sortedOffices) {
+      html += `<tr><td>${escapeHtml(os.officeName)}</td><td>${os.result.hasPrev ? '有' : '—'}</td><td class="num">${os.primaryCycles.length}</td><td class="num">${fmt(os.total)}</td></tr>`;
+    }
+    html += `</tbody></table>`;
   }
-  html += `</tbody></table>`;
 
-  html += `<h3>サイクル明細 (先頭30件)</h3><table><thead><tr><th>ヘルパー</th><th>サイクル日</th><th>夜勤分数</th><th>単位</th><th>当月分</th></tr></thead><tbody>`;
-  const cycPreview = [...primaryCycles].sort((a, b) =>
-    a.cyc.employeeId.localeCompare(b.cyc.employeeId) ||
-    a.cyc.cycleStart.getTime() - b.cyc.cycleStart.getTime()
-  ).slice(0, 30);
-  for (const { cyc, primaryAllow } of cycPreview) {
-    const cs = cyc.cycleStart;
-    const ce = cyc.cycleEnd;
-    const label = `${cs.getMonth() + 1}/${cs.getDate()} → ${ce.getMonth() + 1}/${ce.getDate()}`;
-    const crossMonth = cs.getMonth() !== ce.getMonth() || cs.getFullYear() !== ce.getFullYear();
-    const allowCell = crossMonth
-      ? `${fmt(primaryAllow)} <span class="muted">(合計${fmt(cyc.allowance)})</span>`
-      : fmt(cyc.allowance);
-    html += `<tr><td>${escapeHtml(cyc.employeeId)}</td><td>${label}</td><td class="num">${cyc.totalMin}分</td><td class="num">${cyc.units}</td><td class="num">${allowCell}</td></tr>`;
+  // 事業所ごとのカード
+  for (const os of officeSummaries) {
+    html += renderOfficeCard(os);
   }
-  html += `</tbody></table>`;
-  if (primaryCycles.length > 30) html += `<p class="muted">...他 ${primaryCycles.length - 30} 件</p>`;
 
   summaryDiv.innerHTML = html;
 }
 
-// ========== CSV 出力 ==========
+function renderOfficeCard({ officeName, result, primaryCycles, perEmp, total, fmt }) {
+  const safeOffice = escapeHtml(officeName);
+  const prevLabel = result.hasPrev ? '<span class="badge">前月あり</span>' : '<span class="badge muted">前月なし</span>';
+  let html = `<section class="office-card">
+    <h3>${safeOffice} ${prevLabel} <span class="muted">${fmt(total)}</span></h3>`;
 
-function downloadCSV(mode) {
-  if (!currentCycles) return;
-  const base = (currentFileName || 'result.csv').replace(/\.csv$/i, '');
-  let csvText;
-  let outName;
+  html += `<table><thead><tr><th>ヘルパー名</th><th>サイクル数</th><th>合計</th></tr></thead><tbody>`;
+  const empSorted = [...perEmp.entries()].sort((a, b) => b[1].total - a[1].total);
+  for (const [emp, v] of empSorted) {
+    html += `<tr><td>${escapeHtml(emp)}</td><td class="num">${v.cycles}</td><td class="num">${fmt(v.total)}</td></tr>`;
+  }
+  html += `</tbody></table>`;
 
-  if (mode === 'summary') {
-    const rows = [['ヘルパー名', 'サイクル数', '夜勤手当（円）']];
-    const perEmp = new Map();
-    for (const cyc of currentCycles) {
-      let primaryAllow = 0;
-      let primaryMin = 0;
-      for (const it of cyc.items) {
-        if (it.row.isPrimary) {
-          primaryAllow += it.allowance;
-          primaryMin += it.nightMin;
-        }
-      }
-      if (primaryMin === 0) continue; // 前月内完結サイクルは当月集計から除外
-      const cur = perEmp.get(cyc.employeeId) || { total: 0, cycles: 0 };
-      cur.total += primaryAllow;
-      cur.cycles += 1;
-      perEmp.set(cyc.employeeId, cur);
+  if (primaryCycles.length > 0) {
+    html += `<details><summary>サイクル明細 (${primaryCycles.length}件)</summary><table><thead><tr><th>ヘルパー</th><th>サイクル日</th><th>夜勤分数</th><th>単位</th><th>当月分</th></tr></thead><tbody>`;
+    const cycSorted = [...primaryCycles].sort((a, b) =>
+      a.cyc.employeeId.localeCompare(b.cyc.employeeId) || a.cyc.cycleStart.getTime() - b.cyc.cycleStart.getTime()
+    ).slice(0, 50);
+    for (const { cyc, primaryAllow } of cycSorted) {
+      const cs = cyc.cycleStart, ce = cyc.cycleEnd;
+      const label = `${cs.getMonth() + 1}/${cs.getDate()} → ${ce.getMonth() + 1}/${ce.getDate()}`;
+      const crossMonth = cs.getMonth() !== ce.getMonth() || cs.getFullYear() !== ce.getFullYear();
+      const allowCell = crossMonth ? `${fmt(primaryAllow)} <span class="muted">(合計${fmt(cyc.allowance)})</span>` : fmt(cyc.allowance);
+      html += `<tr><td>${escapeHtml(cyc.employeeId)}</td><td>${label}</td><td class="num">${cyc.totalMin}分</td><td class="num">${cyc.units}</td><td class="num">${allowCell}</td></tr>`;
     }
-    const sorted = [...perEmp.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-    let grandTotal = 0;
-    for (const [emp, v] of sorted) {
-      rows.push([emp, String(v.cycles), String(v.total)]);
-      grandTotal += v.total;
-    }
-    rows.push(['合計', '', String(grandTotal)]);
-    csvText = toCSVText(rows);
-    outName = `${base}_夜勤手当_集計.csv`;
-  } else if (mode === 'detail') {
-    const header = [...currentCsvRows[0], '夜勤手当'];
-    const rows = [header];
-    for (const ar of currentAnnotatedRows) {
-      const raw = [...(ar.raw || [])];
-      while (raw.length < currentCsvRows[0].length) raw.push('');
-      raw.push(ar.allowance != null ? String(ar.allowance) : '');
-      rows.push(raw);
-    }
-    csvText = toCSVText(rows);
-    outName = `${base}_夜勤手当_明細.csv`;
-  } else {
-    return;
+    html += `</tbody></table>`;
+    if (primaryCycles.length > 50) html += `<p class="muted">...他 ${primaryCycles.length - 50} 件</p>`;
+    html += `</details>`;
   }
 
+  html += `<div class="button-row">
+    <button type="button" class="btn-secondary" data-office-summary="${safeOffice}">この事業所の集計CSV</button>
+    <button type="button" class="btn-secondary" data-office-detail="${safeOffice}">この事業所の明細CSV</button>
+  </div>`;
+
+  html += `</section>`;
+  return html;
+}
+
+// ========== CSV 出力 ==========
+
+// summaryDiv 内の事業所別ボタンをイベント委譲でハンドル
+if (summaryDiv) {
+  summaryDiv.addEventListener('click', (e) => {
+    const sBtn = e.target.closest('[data-office-summary]');
+    const dBtn = e.target.closest('[data-office-detail]');
+    if (sBtn) downloadOfficeCSV(sBtn.getAttribute('data-office-summary'), 'summary');
+    else if (dBtn) downloadOfficeCSV(dBtn.getAttribute('data-office-detail'), 'detail');
+  });
+}
+
+function buildOfficeSummaryRows(result, { includeOfficeColumn }) {
+  const header = includeOfficeColumn
+    ? ['事業所', 'ヘルパー名', 'サイクル数', '夜勤手当（円）']
+    : ['ヘルパー名', 'サイクル数', '夜勤手当（円）'];
+  const rows = [header];
+  const perEmp = new Map();
+  for (const cyc of result.cycles) {
+    let primaryAllow = 0;
+    let primaryMin = 0;
+    for (const it of cyc.items) {
+      if (it.row.isPrimary) {
+        primaryAllow += it.allowance;
+        primaryMin += it.nightMin;
+      }
+    }
+    if (primaryMin === 0) continue;
+    const cur = perEmp.get(cyc.employeeId) || { total: 0, cycles: 0 };
+    cur.total += primaryAllow;
+    cur.cycles += 1;
+    perEmp.set(cyc.employeeId, cur);
+  }
+  const sorted = [...perEmp.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  let total = 0;
+  for (const [emp, v] of sorted) {
+    const row = includeOfficeColumn
+      ? [result.officeName, emp, String(v.cycles), String(v.total)]
+      : [emp, String(v.cycles), String(v.total)];
+    rows.push(row);
+    total += v.total;
+  }
+  return { rows, total };
+}
+
+function buildOfficeDetailRows(result, { includeOfficeColumn }) {
+  const base = [...result.primaryCsvRows[0]];
+  const header = includeOfficeColumn ? ['事業所', ...base, '夜勤手当'] : [...base, '夜勤手当'];
+  const rows = [header];
+  for (const ar of result.annotatedRows) {
+    const raw = [...(ar.raw || [])];
+    while (raw.length < base.length) raw.push('');
+    const allow = ar.allowance != null ? String(ar.allowance) : '';
+    const row = includeOfficeColumn ? [result.officeName, ...raw, allow] : [...raw, allow];
+    rows.push(row);
+  }
+  return { rows };
+}
+
+function triggerDownload(csvText, outName) {
   const bom = '\uFEFF';
   const blob = new Blob([bom + csvText], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -546,6 +665,72 @@ function downloadCSV(mode) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadCSV(mode) {
+  if (officeResults.size === 0) return;
+  const year = [...officeResults.values()][0].year;
+  const month = [...officeResults.values()][0].month;
+  const ymTag = `${year}-${String(month).padStart(2, '0')}`;
+  const multi = officeResults.size > 1;
+
+  if (mode === 'summary') {
+    if (!multi) {
+      // 単一事業所: 事業所列なし、既存互換
+      const result = [...officeResults.values()][0];
+      const { rows, total } = buildOfficeSummaryRows(result, { includeOfficeColumn: false });
+      rows.push(['合計', '', String(total)]);
+      triggerDownload(toCSVText(rows), `${ymTag}_${result.officeName}_夜勤手当_集計.csv`);
+    } else {
+      // 複数事業所: 事業所列付き・全事業所合算
+      const header = ['事業所', 'ヘルパー名', 'サイクル数', '夜勤手当（円）'];
+      const rows = [header];
+      let grandTotal = 0;
+      for (const result of officeResults.values()) {
+        const { rows: oRows, total } = buildOfficeSummaryRows(result, { includeOfficeColumn: true });
+        rows.push(...oRows.slice(1)); // スキップ header
+        grandTotal += total;
+      }
+      rows.push(['合計', '', '', String(grandTotal)]);
+      triggerDownload(toCSVText(rows), `${ymTag}_夜勤手当_集計_全事業所.csv`);
+    }
+  } else if (mode === 'detail') {
+    if (!multi) {
+      const result = [...officeResults.values()][0];
+      const { rows } = buildOfficeDetailRows(result, { includeOfficeColumn: false });
+      triggerDownload(toCSVText(rows), `${ymTag}_${result.officeName}_夜勤手当_明細.csv`);
+    } else {
+      // 複数事業所: 事業所列付きで全明細を連結
+      // ヘッダーは最初の事業所のヘッダーを採用（列数ズレがあってもパディング済み）
+      const firstResult = [...officeResults.values()][0];
+      const baseHeader = [...firstResult.primaryCsvRows[0]];
+      const header = ['事業所', ...baseHeader, '夜勤手当'];
+      const rows = [header];
+      for (const result of officeResults.values()) {
+        for (const ar of result.annotatedRows) {
+          const raw = [...(ar.raw || [])];
+          while (raw.length < baseHeader.length) raw.push('');
+          const allow = ar.allowance != null ? String(ar.allowance) : '';
+          rows.push([result.officeName, ...raw, allow]);
+        }
+      }
+      triggerDownload(toCSVText(rows), `${ymTag}_夜勤手当_明細_全事業所.csv`);
+    }
+  }
+}
+
+function downloadOfficeCSV(officeName, mode) {
+  const result = officeResults.get(officeName);
+  if (!result) return;
+  const ymTag = `${result.year}-${String(result.month).padStart(2, '0')}`;
+  if (mode === 'summary') {
+    const { rows, total } = buildOfficeSummaryRows(result, { includeOfficeColumn: false });
+    rows.push(['合計', '', String(total)]);
+    triggerDownload(toCSVText(rows), `${ymTag}_${officeName}_夜勤手当_集計.csv`);
+  } else if (mode === 'detail') {
+    const { rows } = buildOfficeDetailRows(result, { includeOfficeColumn: false });
+    triggerDownload(toCSVText(rows), `${ymTag}_${officeName}_夜勤手当_明細.csv`);
+  }
 }
 
 function toCSVText(rows) {

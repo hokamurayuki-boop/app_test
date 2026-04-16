@@ -797,3 +797,74 @@ input:focus-visible {
   .drawer-label { font-size: 14px; }
   .drawer-en { display: none; }
 }
+
+/* =========================================================
+   多事業所対応の追加スタイル
+   ========================================================= */
+
+.file-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+}
+
+.file-list li {
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--line);
+  color: var(--ink);
+}
+
+.file-list li:last-child { border-bottom: none; }
+
+.office-card {
+  margin-top: 20px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.office-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  margin-bottom: 10px;
+  font-family: var(--font-serif);
+}
+
+.office-card details {
+  margin-top: 10px;
+}
+
+.office-card details summary {
+  cursor: pointer;
+  padding: 6px 0;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+
+.office-card .button-row {
+  margin-top: 10px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--surface);
+  letter-spacing: 0.02em;
+}
+
+.badge.muted {
+  background: var(--line);
+  color: var(--ink-soft);
+}
