@@ -357,3 +357,193 @@ input[type="number"]:focus {
 input:focus-visible {
   outline-offset: 1px;
 }
+
+/* =========================================================
+   Result Panel (Right)
+   ========================================================= */
+
+.result-panel {
+  position: relative;
+  min-height: 400px;
+}
+
+/* 空状態: #resultSection が hidden のときだけ表示 */
+.result-empty {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 40px 24px;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  text-align: center;
+  gap: 14px;
+  background-image:
+    repeating-linear-gradient(135deg, var(--surface-2) 0, var(--surface-2) 1px, transparent 1px, transparent 12px);
+}
+
+.result-panel:has(#resultSection[hidden]) .result-empty,
+.result-panel:not(:has(#resultSection)) .result-empty {
+  display: flex;
+}
+
+.empty-mark {
+  width: 64px; height: 64px;
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 30px;
+  border-radius: 50%;
+  opacity: 0.5;
+}
+
+.empty-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+.empty-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
+
+.result-content {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 24px 28px;
+  box-shadow: var(--shadow-md);
+}
+
+.result-content .summary-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 32px;
+  padding: 20px 24px;
+  margin: 0 0 8px;
+  border-top: 2px solid var(--ink);
+  border-bottom: 1px dotted var(--line);
+  background: var(--surface);
+  border-left: none;
+  border-radius: 0;
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.result-content .summary-box strong {
+  display: block;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* 2番目のラベル (当月合計:) だけ色を変えて強調 */
+.result-content .summary-box strong:nth-of-type(2) { color: var(--accent); }
+
+.result-content h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+  margin: 24px 0 10px;
+  padding-left: 10px;
+  border-left: 4px solid var(--accent);
+  line-height: 1;
+}
+
+.result-content table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(126, 82, 44, 0.06);
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.result-content thead {
+  background: var(--surface-2);
+}
+
+.result-content th {
+  padding: 10px 14px;
+  text-align: left;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+
+.result-content td {
+  padding: 10px 14px;
+  border-top: 1px dotted var(--line);
+  color: var(--ink);
+}
+
+.result-content tr:hover td {
+  background: var(--surface-2);
+  transition: background 100ms;
+}
+
+.result-content td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.result-content .error,
+.file-info .error {
+  background: #fbf1ef;
+  border-left: 4px solid var(--danger);
+  color: var(--danger);
+  padding: 12px 16px;
+  border-radius: 10px;
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.result-content .error ul,
+.file-info .error ul {
+  margin: 6px 0 0 4px;
+  padding-left: 14px;
+}
+
+.result-content .error strong {
+  font-weight: 700;
+}
+
+.result-content .muted {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px dotted var(--line);
+}
