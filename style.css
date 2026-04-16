@@ -547,3 +547,140 @@ input:focus-visible {
   padding-top: 18px;
   border-top: 1px dotted var(--line);
 }
+
+/* =========================================================
+   Drawers (details/summary)
+   ========================================================= */
+
+.drawers {
+  max-width: 1400px;
+  margin: 32px auto;
+  padding: 0 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawer {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.drawer summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 16px 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  transition: background 150ms;
+}
+
+.drawer summary::-webkit-details-marker { display: none; }
+
+.drawer summary:hover { background: var(--surface-2); }
+
+.drawer-mark {
+  width: 10px; height: 10px;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  transform: rotate(-45deg);
+  transition: transform 180ms ease-out;
+  margin-left: 4px;
+}
+
+.drawer[open] .drawer-mark {
+  transform: rotate(45deg);
+}
+
+.drawer-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--ink);
+  flex: 1;
+}
+
+.drawer-en {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--ink-soft);
+}
+
+.drawer-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 250ms ease-out;
+  padding: 0 22px;
+}
+
+.drawer[open] .drawer-body {
+  grid-template-rows: 1fr;
+  padding: 4px 22px 18px;
+}
+
+.drawer-body > * {
+  min-height: 0;
+}
+
+.drawer-body ul {
+  padding-left: 22px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.drawer-body ul li strong {
+  color: var(--accent);
+}
+
+.drawer-body h3 {
+  margin: 14px 0 6px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.drawer-body .note {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+/* テスト結果テーブル */
+#testResults {
+  margin-top: 14px;
+}
+
+#testResults table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  background: var(--surface);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(126, 82, 44, 0.06);
+}
+
+#testResults th, #testResults td {
+  padding: 8px 12px;
+  border-top: 1px dotted var(--line);
+  text-align: left;
+}
+
+#testResults thead th {
+  background: var(--surface-2);
+  border-top: none;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+
+.test-table tr.pass td { background: #f1f5ea; }
+.test-table tr.pass td:last-child { color: var(--ok); font-weight: 700; }
+
+.test-table tr.fail td { background: #fbf1ef; color: var(--danger); }
+.test-table tr.fail td:last-child { font-weight: 700; }
