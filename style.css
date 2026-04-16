@@ -728,3 +728,72 @@ input:focus-visible {
   text-align: center;
   text-transform: uppercase;
 }
+
+/* =========================================================
+   Responsive
+   ========================================================= */
+
+@media (max-width: 959px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .header-inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .privacy {
+    align-self: stretch;
+    text-align: center;
+  }
+
+  .result-panel { min-height: auto; }
+  .result-empty { min-height: 260px; padding: 24px 16px; }
+
+  .result-content .summary-box {
+    font-size: 22px;
+    gap: 8px 20px;
+    padding: 16px 18px;
+  }
+
+  .drawers { margin: 24px auto; padding: 0 20px; }
+  .site-header { padding: 24px 20px 0; }
+  .dashboard { padding: 0 20px; }
+}
+
+@media (max-width: 600px) {
+  .form-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .form-row label { min-width: auto; font-size: 12px; }
+
+  .form-grid { flex-direction: column; }
+  .form-grid .form-row { min-width: 0; }
+
+  input[type="number"] { max-width: none; width: 100%; }
+
+  .step-card { padding: 16px 18px 16px 22px; }
+  .step-num { font-size: 18px; }
+  .step-title { font-size: 15px; }
+
+  .result-content { padding: 18px 16px; overflow-x: auto; }
+  .result-content table { min-width: 480px; }
+
+  .result-content .summary-box { font-size: 20px; }
+  .result-content h3 { font-size: 14px; }
+
+  .button-row { flex-direction: column; }
+  .button-row .btn-primary,
+  .button-row .btn-secondary { width: 100%; }
+
+  .brand-title { font-size: 26px; }
+  .brand-sub { font-size: 13px; }
+
+  .drawer summary { padding: 14px 18px; gap: 10px; }
+  .drawer-label { font-size: 14px; }
+  .drawer-en { display: none; }
+}
