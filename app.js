@@ -715,6 +715,26 @@ function runTests() {
     expect: { perRow: [2000, 3000], cycleAllowance: 5000, cycleCount: 1 },
   });
 
+  // T14: 月跨ぎ 前月末22-23 (1h) + 当月1日3-8 (5h) = 360分 → cap5000 → 1000/4000
+  cases.push({
+    name: 'T14: 月跨ぎ 22-23 + 3-8 → 1000/4000',
+    rows: [
+      makeRow('L', 30, '22:00', '23:00', 2026, 4, 0),
+      makeRow('L', 1, '3:00', '8:00', 2026, 5, 1),
+    ],
+    expect: { perRow: [1000, 4000], cycleAllowance: 5000, cycleCount: 1 },
+  });
+
+  // T15: 月跨ぎ 前月末23-24 (1h) + 当月1日0-2 (2h) = 180分 → 3000 → 1000/2000
+  cases.push({
+    name: 'T15: 月跨ぎ 23-24 + 0-2 → 1000/2000',
+    rows: [
+      makeRow('M', 30, '23:00', '24:00', 2026, 4, 0),
+      makeRow('M', 1, '0:00', '2:00', 2026, 5, 1),
+    ],
+    expect: { perRow: [1000, 2000], cycleAllowance: 3000, cycleCount: 1 },
+  });
+
   let passCount = 0;
   let html = '<table class="test-table"><thead><tr><th>#</th><th>ケース</th><th>期待(行別)</th><th>実測(行別)</th><th>結果</th></tr></thead><tbody>';
   for (let i = 0; i < cases.length; i++) {
