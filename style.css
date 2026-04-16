@@ -684,3 +684,47 @@ input:focus-visible {
 
 .test-table tr.fail td { background: #fbf1ef; color: var(--danger); }
 .test-table tr.fail td:last-child { font-weight: 700; }
+
+/* =========================================================
+   Motion
+   ========================================================= */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.site-header   { animation: fade-up 300ms ease-out 0ms both; }
+.input-panel   { animation: fade-up 300ms ease-out 80ms both; }
+.result-panel  { animation: fade-up 300ms ease-out 160ms both; }
+.drawers       { animation: fade-up 300ms ease-out 240ms both; }
+
+/* 結果要素のスタガー出現（#summary の子要素） */
+@keyframes summary-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+#summary > .summary-box { animation: summary-enter 350ms ease-out 0ms both; }
+#summary > h3           { animation: summary-enter 350ms ease-out 120ms both; }
+#summary > table        { animation: summary-enter 350ms ease-out 240ms both; }
+#summary > h3 + table,
+#summary > h3 + h3,
+#summary > p.muted      { animation: summary-enter 350ms ease-out 360ms both; }
+
+#resultSection .button-row {
+  animation: summary-enter 350ms ease-out 480ms both;
+}
+
+/* footer */
+.site-footer {
+  max-width: 1400px;
+  margin: 24px auto;
+  padding: 20px 32px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--ink-soft);
+  text-align: center;
+  text-transform: uppercase;
+}
