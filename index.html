@@ -4,78 +4,136 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>夜勤手当計算アプリ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,400&family=JetBrains+Mono:wght@400;600&family=Shippori+Mincho:wght@700;900&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>夜勤手当計算アプリ</h1>
-  <p class="lead">訪問介護シフトCSVから夜勤手当を自動計算します。</p>
-  <p class="privacy">🔒 ファイルはブラウザ内でのみ処理され、外部サーバーには送信されません。</p>
+
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand">
+      <h1 class="brand-title">夜勤手当</h1>
+      <p class="brand-sub"><em>Night-shift allowance</em></p>
+    </div>
+    <p class="privacy">🔒 ファイルはブラウザ内でのみ処理され、外部サーバーには送信されません</p>
+  </div>
+  <div class="header-rule"></div>
 </header>
 
-<main>
-  <section class="card">
-    <h2>STEP 1: CSVファイルを選択</h2>
-    <div class="form-row">
-      <label>当月CSV（必須）</label>
-      <input type="file" id="fileInput" accept=".csv">
+<main class="dashboard">
+
+  <aside class="input-panel">
+
+    <section class="step-card" id="step1">
+      <span class="step-indicator"></span>
+      <header class="step-head">
+        <span class="step-num">01</span>
+        <h2 class="step-title">CSVを選ぶ</h2>
+      </header>
+      <div class="form-row">
+        <label for="fileInput">当月CSV<span class="req">必須</span></label>
+        <input type="file" id="fileInput" accept=".csv">
+      </div>
+      <div id="fileInfo" class="file-info"></div>
+      <div class="form-row">
+        <label for="prevFileInput">前月CSV<span class="opt">任意</span></label>
+        <input type="file" id="prevFileInput" accept=".csv">
+      </div>
+      <div id="prevFileInfo" class="file-info"></div>
+      <p class="note">前月CSVを指定すると、当月1日0〜8時の夜勤手当を前月末22〜24時分と合算し、5000円上限を月跨ぎで正しく適用します。</p>
+    </section>
+
+    <section class="step-card" id="configSection" hidden>
+      <span class="step-indicator"></span>
+      <header class="step-head">
+        <span class="step-num">02</span>
+        <h2 class="step-title">年月の確認</h2>
+      </header>
+      <p class="note">ファイル名から自動抽出します。誤りがあれば修正してください。</p>
+      <div class="form-grid">
+        <div class="form-row">
+          <label for="yearInput">年</label>
+          <input type="number" id="yearInput" min="2000" max="2100">
+        </div>
+        <div class="form-row">
+          <label for="monthInput">月</label>
+          <input type="number" id="monthInput" min="1" max="12">
+        </div>
+      </div>
+      <div id="ymSource" class="ym-source"></div>
+    </section>
+
+    <section class="step-card" id="step3">
+      <span class="step-indicator"></span>
+      <header class="step-head">
+        <span class="step-num">03</span>
+        <h2 class="step-title">計算する</h2>
+      </header>
+      <button id="runBtn" class="btn-primary">計算実行</button>
+    </section>
+
+  </aside>
+
+  <section class="result-panel">
+
+    <div class="result-empty" id="resultEmpty">
+      <div class="empty-mark">夜</div>
+      <p class="empty-title">CSVを選択すると、<br>ここに計算結果が表示されます</p>
+      <p class="empty-sub">Select a CSV to see results</p>
     </div>
-    <div class="form-row">
-      <label>前月CSV（任意）</label>
-      <input type="file" id="prevFileInput" accept=".csv">
-    </div>
-    <p class="muted">前月CSVを指定すると、当月1日0〜8時の夜勤手当を前月末22〜24時分と合算し、5000円上限を月跨ぎで正しく適用します。</p>
-    <div id="fileInfo" class="muted"></div>
-    <div id="prevFileInfo" class="muted"></div>
+
+    <section id="resultSection" class="result-content" hidden>
+      <div id="summary"></div>
+      <div class="button-row">
+        <button id="downloadSummaryBtn" class="btn-primary">集計CSVをダウンロード</button>
+        <button id="downloadDetailBtn" class="btn-secondary">明細CSVをダウンロード</button>
+      </div>
+    </section>
+
   </section>
 
-  <section class="card" id="configSection" hidden>
-    <h2>STEP 2: 対象年月の確認</h2>
-    <p class="muted">ファイル名から自動抽出します。誤りがあれば修正してください。</p>
-    <div class="form-row">
-      <label>年</label>
-      <input type="number" id="yearInput" min="2000" max="2100">
-    </div>
-    <div class="form-row">
-      <label>月</label>
-      <input type="number" id="monthInput" min="1" max="12">
-    </div>
-    <div id="ymSource" class="muted"></div>
-    <button id="runBtn" class="primary">計算する</button>
-  </section>
-
-  <section class="card" id="resultSection" hidden>
-    <h2>STEP 3: 計算結果</h2>
-    <div id="summary"></div>
-    <div class="button-row">
-      <button id="downloadSummaryBtn" class="primary">集計CSVをダウンロード</button>
-      <button id="downloadDetailBtn" class="primary">明細CSVをダウンロード</button>
-    </div>
-  </section>
-
-  <section class="card collapsible">
-    <h2>計算ルール</h2>
-    <ul>
-      <li>1サイクル = <strong>22:00(day D) 〜 翌日 08:00</strong> の 10 時間帯</li>
-      <li>サイクル候補日: 「22時以降に終わる行の日」または「8時前に始まる行の前日」</li>
-      <li>サイクル内の夜勤分数を<strong>合算</strong>してから、単位換算: <strong>ceil(合計分数 / 30) × 500円</strong>（30分未満は<strong>切り上げ</strong>: 10分→500円、40分→1000円、70分→1500円）</li>
-      <li>1サイクルあたりの上限: <strong>5,000円</strong></li>
-      <li>明細行への配分: 同一サイクル内の行を時系列順に並べ、累積夜勤分数ベースで割り付け（合計がサイクル手当と一致）</li>
-    </ul>
-    <h3>CSVフォーマット（Shift-JIS / 10列）</h3>
-    <p class="muted">ヘルパー名 / 日付 / 曜日 / 利用者 / 業務種別 / サービス内容 / 開始時間 / 終了時間 / 提供時間 / 備考</p>
-  </section>
-
-  <section class="card collapsible">
-    <h2>動作確認（組み込みテスト）</h2>
-    <p class="muted">計算ロジックを仕様テストで検証します。</p>
-    <button id="testBtn">テストを実行</button>
-    <div id="testResults"></div>
-  </section>
 </main>
 
-<footer>
-  <p class="muted">夜勤手当計算アプリ</p>
+<section class="drawers">
+
+  <details class="drawer">
+    <summary>
+      <span class="drawer-mark"></span>
+      <span class="drawer-label">計算ルール</span>
+      <span class="drawer-en">CALCULATION RULES</span>
+    </summary>
+    <div class="drawer-body">
+      <ul>
+        <li>1サイクル = <strong>22:00(day D) 〜 翌日 08:00</strong> の 10 時間帯</li>
+        <li>サイクル候補日: 「22時以降に終わる行の日」または「8時前に始まる行の前日」</li>
+        <li>サイクル内の夜勤分数を<strong>合算</strong>してから、単位換算: <strong>ceil(合計分数 / 30) × 500円</strong>（30分未満は<strong>切り上げ</strong>: 10分→500円、40分→1000円、70分→1500円）</li>
+        <li>1サイクルあたりの上限: <strong>5,000円</strong></li>
+        <li>明細行への配分: 同一サイクル内の行を時系列順に並べ、累積夜勤分数ベースで割り付け（合計がサイクル手当と一致）</li>
+      </ul>
+      <h3>CSVフォーマット（Shift-JIS / 10列）</h3>
+      <p class="note">ヘルパー名 / 日付 / 曜日 / 利用者 / 業務種別 / サービス内容 / 開始時間 / 終了時間 / 提供時間 / 備考</p>
+    </div>
+  </details>
+
+  <details class="drawer">
+    <summary>
+      <span class="drawer-mark"></span>
+      <span class="drawer-label">動作確認（組み込みテスト）</span>
+      <span class="drawer-en">BUILT-IN TESTS</span>
+    </summary>
+    <div class="drawer-body">
+      <p class="note">計算ロジックを仕様テストで検証します。</p>
+      <button id="testBtn" class="btn-secondary">テストを実行</button>
+      <div id="testResults"></div>
+    </div>
+  </details>
+
+</section>
+
+<footer class="site-footer">
+  <p>夜勤手当計算アプリ · 2026</p>
 </footer>
 
 <script src="app.js"></script>
