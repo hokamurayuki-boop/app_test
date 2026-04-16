@@ -26,29 +26,34 @@ function overlapMinutes(aStart, aEnd, bStart, bEnd) {
   return Math.max(0, Math.round((e - s) / 60000));
 }
 
-/** サイクル帯 [22:00 cycleDay, 08:00 cycleDay+1] と行の重なり分数 */
-function cycleOverlapMinutes(row, year, month, cycleDay) {
-  const cycleStart = new Date(year, month - 1, cycleDay, 22, 0);
-  const cycleEnd = new Date(year, month - 1, cycleDay + 1, 8, 0);
+/** サイクル帯 [cycleStart, cycleStart+10h] と行の重なり分数 */
+function cycleOverlapMinutes(row, cycleStart) {
+  const cycleEnd = new Date(cycleStart.getTime() + 10 * 3600 * 1000);
   return overlapMinutes(row.start, row.end, cycleStart, cycleEnd);
 }
 
-/** 行集合からサイクル候補日を抽出 (元スクリプト準拠) */
-function collectCycleDays(rows) {
-  const days = new Set();
+/** 行集合からサイクル起点(22:00 Date)を抽出。月跨ぎ・年跨ぎは絶対Dateで自然に処理される */
+function collectCycleStarts(rows) {
+  const byTime = new Map();
   for (const r of rows) {
-    if (r.endMin > 22 * 60) days.add(r.day);      // 22時以降終了 → そのdayのサイクル
-    if (r.startMin < 8 * 60) days.add(r.day - 1); // 8時前開始 → 前日のサイクル
+    if (r.endMin > 22 * 60) {
+      const d = new Date(r.start.getFullYear(), r.start.getMonth(), r.start.getDate(), 22, 0);
+      byTime.set(d.getTime(), d);
+    }
+    if (r.startMin < 8 * 60) {
+      const d = new Date(r.start.getFullYear(), r.start.getMonth(), r.start.getDate() - 1, 22, 0);
+      byTime.set(d.getTime(), d);
+    }
   }
-  return [...days].sort((a, b) => a - b);
+  return [...byTime.values()].sort((a, b) => a.getTime() - b.getTime());
 }
 
-/** 1サイクルぶんを計算 (合算 → floor → cap → FIFO 配分) */
-function computeCycle(employeeId, empRows, year, month, cycleDay) {
+/** 1サイクルぶんを計算 (合算 → ceil → cap → FIFO 配分) */
+function computeCycle(employeeId, empRows, cycleStart) {
   const contributing = [];
   let totalMin = 0;
   for (const row of empRows) {
-    const nm = cycleOverlapMinutes(row, year, month, cycleDay);
+    const nm = cycleOverlapMinutes(row, cycleStart);
     if (nm > 0) {
       contributing.push({ row, nightMin: nm, allowance: 0 });
       totalMin += nm;
@@ -57,7 +62,6 @@ function computeCycle(employeeId, empRows, year, month, cycleDay) {
   const units = Math.ceil(totalMin / 30);
   const allowance = Math.min(units * 500, 5000);
 
-  // 時系列順に累積ベースで配分 → 合計が allowance に一致
   contributing.sort((a, b) => a.row.start - b.row.start);
   let cumMin = 0;
   let prevCumAllow = 0;
@@ -68,11 +72,12 @@ function computeCycle(employeeId, empRows, year, month, cycleDay) {
     prevCumAllow = cumAllow;
   }
 
-  return { employeeId, cycleDay, year, month, items: contributing, totalMin, units, allowance };
+  const cycleEnd = new Date(cycleStart.getTime() + 10 * 3600 * 1000);
+  return { employeeId, cycleStart, cycleEnd, items: contributing, totalMin, units, allowance };
 }
 
 /** 全行 → サイクル配列 (allowance>0 のみ) */
-function computeCycles(rows, year, month) {
+function computeCycles(rows) {
   const byEmp = new Map();
   for (const r of rows) {
     if (!byEmp.has(r.employeeId)) byEmp.set(r.employeeId, []);
@@ -80,9 +85,9 @@ function computeCycles(rows, year, month) {
   }
   const cycles = [];
   for (const [emp, empRows] of byEmp) {
-    const cycleDays = collectCycleDays(empRows);
-    for (const cd of cycleDays) {
-      const cyc = computeCycle(emp, empRows, year, month, cd);
+    const starts = collectCycleStarts(empRows);
+    for (const cs of starts) {
+      const cyc = computeCycle(emp, empRows, cs);
       if (cyc.allowance > 0) cycles.push(cyc);
     }
   }
@@ -180,9 +185,14 @@ let currentCsvRows = null;
 let currentFileName = null;
 let currentCycles = null;          // 計算後サイクル
 let currentAnnotatedRows = null;   // 全行: { originalIndex, raw, allowance }
+let prevCsvRows = null;
+let prevFileName = null;
+let prevYM = null;                 // { year, month } — 前月CSVから抽出
 
 const fileInput = document.getElementById('fileInput');
+const prevFileInput = document.getElementById('prevFileInput');
 const fileInfo = document.getElementById('fileInfo');
+const prevFileInfo = document.getElementById('prevFileInfo');
 const configSection = document.getElementById('configSection');
 const yearInput = document.getElementById('yearInput');
 const monthInput = document.getElementById('monthInput');
@@ -196,6 +206,7 @@ const testBtn = document.getElementById('testBtn');
 const testResults = document.getElementById('testResults');
 
 if (fileInput) fileInput.addEventListener('change', handleFile);
+if (prevFileInput) prevFileInput.addEventListener('change', handlePrevFile);
 if (runBtn) runBtn.addEventListener('click', runCalculation);
 if (downloadSummaryBtn) downloadSummaryBtn.addEventListener('click', () => downloadCSV('summary'));
 if (downloadDetailBtn) downloadDetailBtn.addEventListener('click', () => downloadCSV('detail'));
@@ -212,7 +223,7 @@ async function handleFile(e) {
     currentCsvRows = parseCSV(text);
 
     fileInfo.innerHTML = `
-      <div>選択中: <strong>${escapeHtml(file.name)}</strong> (${(file.size / 1024).toFixed(1)} KB)</div>
+      <div>当月: <strong>${escapeHtml(file.name)}</strong> (${(file.size / 1024).toFixed(1)} KB)</div>
       <div>読み込み行数: ${currentCsvRows.length}行 (ヘッダー含む)</div>
     `;
 
@@ -238,6 +249,104 @@ async function handleFile(e) {
   }
 }
 
+async function handlePrevFile(e) {
+  const file = e.target.files[0];
+  if (!file) {
+    prevCsvRows = null;
+    prevFileName = null;
+    prevYM = null;
+    prevFileInfo.innerHTML = '';
+    return;
+  }
+  prevFileName = file.name;
+
+  try {
+    const buf = await file.arrayBuffer();
+    const text = decodeCSV(buf);
+    prevCsvRows = parseCSV(text);
+    prevYM = extractYearMonth(file.name);
+
+    const ymLabel = prevYM ? `${prevYM.year}年${prevYM.month}月` : '年月抽出不可（手動入力の当月の前月として扱います）';
+    prevFileInfo.innerHTML = `
+      <div>前月: <strong>${escapeHtml(file.name)}</strong> (${(file.size / 1024).toFixed(1)} KB) — ${escapeHtml(ymLabel)}</div>
+      <div>読み込み行数: ${prevCsvRows.length}行 (ヘッダー含む)</div>
+    `;
+  } catch (err) {
+    console.error(err);
+    prevFileInfo.innerHTML = `<div class="error">前月CSV読み込みエラー: ${escapeHtml(err.message)}</div>`;
+    prevCsvRows = null;
+    prevYM = null;
+  }
+}
+
+function parseRowsFromCsv(csvRows, year, month, { isPrimary, originPrefix }) {
+  const header = csvRows[0].map(s => String(s).trim());
+  const col = {
+    employee: findCol(header, ['ヘルパー', '従業員', '氏名', '名前']),
+    day:      findCol(header, ['日付', '日', 'date']),
+    start:    findCol(header, ['開始時間', '開始', '出勤', 'start']),
+    end:      findCol(header, ['終了時間', '終了', '退勤', 'end']),
+  };
+  const missing = Object.entries(col).filter(([, v]) => v < 0).map(([k]) => k);
+  if (missing.length > 0) {
+    throw new Error(`${originPrefix}ヘッダーから必要な列が見つかりません: ${missing.join(', ')} (検出: ${header.join(' / ')})`);
+  }
+
+  const rows = [];
+  const errors = [];
+  const annotatedRows = [];
+
+  for (let i = 1; i < csvRows.length; i++) {
+    const r = csvRows[i];
+    if (!r || r.length === 0 || r.every(c => !c || String(c).trim() === '')) {
+      annotatedRows.push({ originalIndex: i, raw: r || [], allowance: null, isPrimary });
+      continue;
+    }
+    const emp = String(r[col.employee] || '').trim();
+    const dayStr = String(r[col.day] || '').trim();
+    const startStr = String(r[col.start] || '').trim();
+    const endStr = String(r[col.end] || '').trim();
+
+    const day = parseInt(dayStr, 10);
+    const startT = parseTime(startStr);
+    const endT = parseTime(endStr);
+
+    if (!emp || !(day >= 1 && day <= 31) || !startT || !endT) {
+      errors.push(`${originPrefix}${i + 1}行目: パース不可 (${emp || '-'}, 日=${dayStr}, ${startStr}~${endStr})`);
+      annotatedRows.push({ originalIndex: i, raw: r, allowance: null, isPrimary });
+      continue;
+    }
+
+    const startMin = startT.h * 60 + startT.mi;
+    const endMin = endT.h * 60 + endT.mi;
+    const start = makeDateTime(year, month, day, startT.h, startT.mi);
+    let end = makeDateTime(year, month, day, endT.h, endT.mi);
+    if (end <= start) end = new Date(end.getTime() + 24 * 3600 * 1000);
+
+    const rowObj = {
+      originalIndex: i,
+      raw: r,
+      employeeId: emp,
+      day,
+      startMin,
+      endMin,
+      start,
+      end,
+      isPrimary,
+    };
+    rows.push(rowObj);
+    annotatedRows.push(rowObj);
+  }
+
+  return { rows, errors, annotatedRows };
+}
+
+/** 当月年月から前月の {year, month} を算出 */
+function previousYearMonth(year, month) {
+  if (month === 1) return { year: year - 1, month: 12 };
+  return { year, month: month - 1 };
+}
+
 function runCalculation() {
   try {
     summaryDiv.innerHTML = '';
@@ -252,87 +361,46 @@ function runCalculation() {
       return;
     }
 
-    const header = currentCsvRows[0].map(s => String(s).trim());
-    const col = {
-      employee: findCol(header, ['ヘルパー', '従業員', '氏名', '名前']),
-      day:      findCol(header, ['日付', '日', 'date']),
-      start:    findCol(header, ['開始時間', '開始', '出勤', 'start']),
-      end:      findCol(header, ['終了時間', '終了', '退勤', 'end']),
-    };
-    const missing = Object.entries(col).filter(([, v]) => v < 0).map(([k]) => k);
-    if (missing.length > 0) {
-      summaryDiv.innerHTML = `<div class="error">ヘッダーから必要な列が見つかりません: ${missing.join(', ')}<br>検出ヘッダー: ${header.join(' / ')}</div>`;
-      return;
+    const primary = parseRowsFromCsv(currentCsvRows, year, month, { isPrimary: true, originPrefix: '' });
+    const errors = [...primary.errors];
+
+    let prev = null;
+    if (prevCsvRows && prevCsvRows.length >= 2) {
+      const expectedPrev = previousYearMonth(year, month);
+      const pYear = prevYM ? prevYM.year : expectedPrev.year;
+      const pMonth = prevYM ? prevYM.month : expectedPrev.month;
+      if (prevYM && (prevYM.year !== expectedPrev.year || prevYM.month !== expectedPrev.month)) {
+        errors.push(`前月CSVの年月 (${prevYM.year}年${prevYM.month}月) は当月の直前月 (${expectedPrev.year}年${expectedPrev.month}月) と一致しません。`);
+      }
+      prev = parseRowsFromCsv(prevCsvRows, pYear, pMonth, { isPrimary: false, originPrefix: '前月CSV ' });
+      errors.push(...prev.errors);
     }
 
-    const rows = [];
-    const errors = [];
-    const annotatedRows = [];
-
-    for (let i = 1; i < currentCsvRows.length; i++) {
-      const r = currentCsvRows[i];
-      if (!r || r.length === 0 || r.every(c => !c || String(c).trim() === '')) {
-        annotatedRows.push({ originalIndex: i, raw: r || [], allowance: null });
-        continue;
-      }
-      const emp = String(r[col.employee] || '').trim();
-      const dayStr = String(r[col.day] || '').trim();
-      const startStr = String(r[col.start] || '').trim();
-      const endStr = String(r[col.end] || '').trim();
-
-      const day = parseInt(dayStr, 10);
-      const startT = parseTime(startStr);
-      const endT = parseTime(endStr);
-
-      if (!emp || !(day >= 1 && day <= 31) || !startT || !endT) {
-        errors.push(`${i + 1}行目: パース不可 (${emp || '-'}, 日=${dayStr}, ${startStr}~${endStr})`);
-        annotatedRows.push({ originalIndex: i, raw: r, allowance: null });
-        continue;
-      }
-
-      const startMin = startT.h * 60 + startT.mi;
-      const endMin = endT.h * 60 + endT.mi;
-      const start = makeDateTime(year, month, day, startT.h, startT.mi);
-      let end = makeDateTime(year, month, day, endT.h, endT.mi);
-      if (end <= start) end = new Date(end.getTime() + 24 * 3600 * 1000);
-
-      const rowObj = {
-        originalIndex: i,
-        raw: r,
-        employeeId: emp,
-        day,
-        startMin,
-        endMin,
-        start,
-        end,
-      };
-      rows.push(rowObj);
-      annotatedRows.push(rowObj);
-    }
-
-    if (rows.length === 0) {
+    if (primary.rows.length === 0) {
       summaryDiv.innerHTML = `<div class="error">有効な勤怠行が見つかりませんでした。</div>`;
       return;
     }
 
-    const cycles = computeCycles(rows, year, month);
+    const allRows = prev ? primary.rows.concat(prev.rows) : primary.rows;
+    const cycles = computeCycles(allRows);
 
-    // 行ごとの手当合計: 複数サイクルにまたがる行に備えて加算
+    // 行ごとの手当合計: 当月行のみ集計 (originalIndex が当月と前月で被らないよう分離判定)
     const allowanceByIndex = new Map();
     for (const cyc of cycles) {
       for (const it of cyc.items) {
-        const prev = allowanceByIndex.get(it.row.originalIndex) || 0;
-        allowanceByIndex.set(it.row.originalIndex, prev + it.allowance);
+        if (!it.row.isPrimary) continue;
+        const pAll = allowanceByIndex.get(it.row.originalIndex) || 0;
+        allowanceByIndex.set(it.row.originalIndex, pAll + it.allowance);
       }
     }
-    for (const ar of annotatedRows) {
+    for (const ar of primary.annotatedRows) {
       if ('employeeId' in ar) {
         ar.allowance = allowanceByIndex.get(ar.originalIndex) || 0;
       }
     }
 
     currentCycles = cycles;
-    currentAnnotatedRows = annotatedRows;
+    currentAnnotatedRows = primary.annotatedRows;
     renderSummary(cycles, errors, year, month);
     resultSection.hidden = false;
   } catch (err) {
@@ -352,14 +420,28 @@ function findCol(header, keywords) {
 function renderSummary(cycles, errors, year, month) {
   const fmt = n => '¥' + n.toLocaleString('ja-JP');
 
+  // 当月行を含むサイクルのみ表示・集計対象 (前月行のみのサイクルは当月には関係ない)
+  const primaryCycles = [];
+  for (const cyc of cycles) {
+    let primaryAllow = 0;
+    let primaryMin = 0;
+    for (const it of cyc.items) {
+      if (it.row.isPrimary) {
+        primaryAllow += it.allowance;
+        primaryMin += it.nightMin;
+      }
+    }
+    if (primaryMin > 0) primaryCycles.push({ cyc, primaryAllow, primaryMin });
+  }
+
   const perEmp = new Map();
   let grandTotal = 0;
-  for (const cyc of cycles) {
+  for (const { cyc, primaryAllow } of primaryCycles) {
     const cur = perEmp.get(cyc.employeeId) || { total: 0, cycles: 0 };
-    cur.total += cyc.allowance;
+    cur.total += primaryAllow;
     cur.cycles += 1;
     perEmp.set(cyc.employeeId, cur);
-    grandTotal += cyc.allowance;
+    grandTotal += primaryAllow;
   }
 
   let html = '';
@@ -371,8 +453,8 @@ function renderSummary(cycles, errors, year, month) {
 
   html += `<div class="summary-box">
     <strong>対象年月:</strong> ${year}年${month}月
-    <strong>総合計:</strong> ${fmt(grandTotal)}
-    <strong>サイクル数:</strong> ${cycles.length}
+    <strong>当月合計:</strong> ${fmt(grandTotal)}
+    <strong>サイクル数:</strong> ${primaryCycles.length}
     <strong>従業員数:</strong> ${perEmp.size}
   </div>`;
 
@@ -383,17 +465,23 @@ function renderSummary(cycles, errors, year, month) {
   }
   html += `</tbody></table>`;
 
-  html += `<h3>サイクル明細 (先頭30件)</h3><table><thead><tr><th>ヘルパー</th><th>サイクル日</th><th>夜勤分数</th><th>単位</th><th>手当</th></tr></thead><tbody>`;
-  const cycPreview = [...cycles].sort((a, b) =>
-    a.employeeId.localeCompare(b.employeeId) || a.cycleDay - b.cycleDay
+  html += `<h3>サイクル明細 (先頭30件)</h3><table><thead><tr><th>ヘルパー</th><th>サイクル日</th><th>夜勤分数</th><th>単位</th><th>当月分</th></tr></thead><tbody>`;
+  const cycPreview = [...primaryCycles].sort((a, b) =>
+    a.cyc.employeeId.localeCompare(b.cyc.employeeId) ||
+    a.cyc.cycleStart.getTime() - b.cyc.cycleStart.getTime()
   ).slice(0, 30);
-  for (const cyc of cycPreview) {
-    const label = cyc.cycleDay === 0 ? `月跨ぎ(前月→1日)` :
-      `${cyc.month}/${cyc.cycleDay} → ${cyc.month}/${cyc.cycleDay + 1}`;
-    html += `<tr><td>${escapeHtml(cyc.employeeId)}</td><td>${label}</td><td class="num">${cyc.totalMin}分</td><td class="num">${cyc.units}</td><td class="num">${fmt(cyc.allowance)}</td></tr>`;
+  for (const { cyc, primaryAllow } of cycPreview) {
+    const cs = cyc.cycleStart;
+    const ce = cyc.cycleEnd;
+    const label = `${cs.getMonth() + 1}/${cs.getDate()} → ${ce.getMonth() + 1}/${ce.getDate()}`;
+    const crossMonth = cs.getMonth() !== ce.getMonth() || cs.getFullYear() !== ce.getFullYear();
+    const allowCell = crossMonth
+      ? `${fmt(primaryAllow)} <span class="muted">(合計${fmt(cyc.allowance)})</span>`
+      : fmt(cyc.allowance);
+    html += `<tr><td>${escapeHtml(cyc.employeeId)}</td><td>${label}</td><td class="num">${cyc.totalMin}分</td><td class="num">${cyc.units}</td><td class="num">${allowCell}</td></tr>`;
   }
   html += `</tbody></table>`;
-  if (cycles.length > 30) html += `<p class="muted">...他 ${cycles.length - 30} 件</p>`;
+  if (primaryCycles.length > 30) html += `<p class="muted">...他 ${primaryCycles.length - 30} 件</p>`;
 
   summaryDiv.innerHTML = html;
 }
@@ -410,8 +498,17 @@ function downloadCSV(mode) {
     const rows = [['ヘルパー名', 'サイクル数', '夜勤手当（円）']];
     const perEmp = new Map();
     for (const cyc of currentCycles) {
+      let primaryAllow = 0;
+      let primaryMin = 0;
+      for (const it of cyc.items) {
+        if (it.row.isPrimary) {
+          primaryAllow += it.allowance;
+          primaryMin += it.nightMin;
+        }
+      }
+      if (primaryMin === 0) continue; // 前月内完結サイクルは当月集計から除外
       const cur = perEmp.get(cyc.employeeId) || { total: 0, cycles: 0 };
-      cur.total += cyc.allowance;
+      cur.total += primaryAllow;
       cur.cycles += 1;
       perEmp.set(cyc.employeeId, cur);
     }
@@ -489,6 +586,7 @@ function runTests() {
       endMin,
       start,
       end,
+      isPrimary: true,
     };
   }
 
@@ -587,11 +685,41 @@ function runTests() {
     expect: { perRow: [2000, 3000, 2000, 3000], cycleAllowance: null, cycleCount: 2 },
   });
 
+  // T11: 月跨ぎサイクル 4/30 22-24 + 5/1 0-8 → 2000/3000 (cap 5000)
+  cases.push({
+    name: 'T11: 月跨ぎ 前月末2h+当月1日8h → 2000/3000',
+    rows: [
+      makeRow('I', 30, '22:00', '24:00', 2026, 4, 0),
+      makeRow('I', 1, '00:00', '8:00', 2026, 5, 1),
+    ],
+    expect: { perRow: [2000, 3000], cycleAllowance: 5000, cycleCount: 1 },
+  });
+
+  // T12: 月跨ぎ 4/30 23-24 (1h) + 5/1 0-8 → 合計9h → ceil(540/30)=18 → cap 5000 → 1000/4000
+  cases.push({
+    name: 'T12: 月跨ぎ 前月末1h+当月1日8h → 1000/4000',
+    rows: [
+      makeRow('J', 30, '23:00', '24:00', 2026, 4, 0),
+      makeRow('J', 1, '00:00', '8:00', 2026, 5, 1),
+    ],
+    expect: { perRow: [1000, 4000], cycleAllowance: 5000, cycleCount: 1 },
+  });
+
+  // T13: 年跨ぎ 2026/12/31 22-24 + 2027/1/1 0-8 → 2000/3000
+  cases.push({
+    name: 'T13: 年跨ぎ 12/31 22-24 + 1/1 0-8 → 2000/3000',
+    rows: [
+      makeRow('K', 31, '22:00', '24:00', 2026, 12, 0),
+      makeRow('K', 1, '00:00', '8:00', 2027, 1, 1),
+    ],
+    expect: { perRow: [2000, 3000], cycleAllowance: 5000, cycleCount: 1 },
+  });
+
   let passCount = 0;
   let html = '<table class="test-table"><thead><tr><th>#</th><th>ケース</th><th>期待(行別)</th><th>実測(行別)</th><th>結果</th></tr></thead><tbody>';
   for (let i = 0; i < cases.length; i++) {
     const c = cases[i];
-    const cycles = computeCycles(c.rows, 2026, 4);
+    const cycles = computeCycles(c.rows);
 
     // 行別手当を originalIndex 順に集計
     const byIdx = new Map();

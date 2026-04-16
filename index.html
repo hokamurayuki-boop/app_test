@@ -16,8 +16,17 @@
 <main>
   <section class="card">
     <h2>STEP 1: CSVファイルを選択</h2>
-    <input type="file" id="fileInput" accept=".csv">
+    <div class="form-row">
+      <label>当月CSV（必須）</label>
+      <input type="file" id="fileInput" accept=".csv">
+    </div>
+    <div class="form-row">
+      <label>前月CSV（任意）</label>
+      <input type="file" id="prevFileInput" accept=".csv">
+    </div>
+    <p class="muted">前月CSVを指定すると、当月1日0〜8時の夜勤手当を前月末22〜24時分と合算し、5000円上限を月跨ぎで正しく適用します。</p>
     <div id="fileInfo" class="muted"></div>
+    <div id="prevFileInfo" class="muted"></div>
   </section>
 
   <section class="card" id="configSection" hidden>
